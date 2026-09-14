@@ -2,11 +2,12 @@
 
 ![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)
 ![Python](https://img.shields.io/badge/Python-3.11%2B-blue.svg)
+![CI](https://github.com/sstarostin1/HepFeed/actions/workflows/ci.yml/badge.svg)
 ![Status](https://img.shields.io/badge/status-in%20development-orange.svg)
 
 **Telegram-бот-агент, который собирает свежие публикации по физике элементарных частиц (ФЭЧ) и физике ускорителей (ФУ), обогащает каждую работу контекстом и публикует в канал лаконичные профессиональные заметки на русском языке — без популизма и журналистской воды.**
 
-> **Статус: в разработке.** В репозитории сейчас — концепция и спецификация источников; код конвейера появится по мере реализации фаз из [дорожной карты](docs/CONCEPT.md#12-дорожная-карта). Следить за прогрессом можно в [Issues](../../issues).
+> **Статус: в разработке.** Скелет пакета, конфигурация и CI готовы; модули конвейера реализуются по фазам [дорожной карты](docs/CONCEPT.md#12-дорожная-карта) — следующая веха: сборщик arXiv (Фаза 1). Прогресс — в [Issues](../../issues).
 
 ## Зачем
 
@@ -56,12 +57,45 @@ HepFeed решает задачу **раннего оповещения с пр�
 | Хранение | SQLite → PostgreSQL |
 | LLM | облачный API (GPT / Claude / Gemini) |
 
+## Быстрый старт
+
+```bash
+git clone https://github.com/sstarostin1/HepFeed.git
+cd HepFeed
+python -m venv .venv
+source .venv/bin/activate             # Linux/macOS; Windows Git Bash: source .venv/Scripts/activate
+pip install -e ".[dev]"
+pre-commit install                    # сканер секретов на каждый коммит
+cp .env.example .env                  # заполните реальные значения
+```
+
+Диагностика конфигурации (что видно боту из окружения):
+
+```bash
+python -m hepfeed check
+```
+
+Тесты и линтер:
+
+```bash
+pytest
+ruff check . && ruff format --check .
+```
+
+Для будущих модулей обогащения понадобятся extras: `pip install -e ".[pdf,db]"` (PyMuPDF, SQLAlchemy) — состав зависимостей см. в [pyproject.toml](pyproject.toml).
+
 ## Структура репозитория
 
 ```
-docs/          концепция и спецификации (единственный источник истины)
-src/hepfeed/   код конвейера: ingestion, filtering, enrichment, generation, publishing
-tests/         pytest
+docs/              концепция и спецификации (единственный источник истины)
+src/hepfeed/       пакет конвейера
+  ingestion/       сбор публикаций (arXiv, INSPIRE, CDS, RSS, институты)
+  filtering/       фильтрация и тегирование
+  enrichment/      обогащение контекстом
+  generation/      генерация заметок (LLM)
+  publishing/      публикация в Telegram, модерация
+  logging/         журнал обработки и аналитика
+tests/             pytest
 ```
 
 ## Документация

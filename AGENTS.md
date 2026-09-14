@@ -21,10 +21,12 @@
 - Документация, README, промпты генерации заметок, комментарии «для пользователя» — **русский**.
 - Код: идентификаторы, commit-сообщения (**Conventional Commits**), docstrings — **английский**.
 
-## Стиль кода (актуален с появлением кода)
+## Стиль кода
 
 - Python 3.11+; линтер и форматтер — **ruff**; type hints обязательны.
 - Структура: `src/hepfeed/<модуль>` — модули соответствуют §6 CONCEPT: `ingestion`, `filtering`, `enrichment`, `generation`, `publishing`, `logging`.
+- Окружение: `pip install -e ".[dev]"`; проверки — `ruff check .`, `ruff format --check .`, `pytest`.
+- CI: GitHub Actions — lint + тесты на Python 3.11 и 3.13 (`.github/workflows/ci.yml`).
 - Конфигурация — через переменные окружения / pydantic-settings; никаких хардкодов ключей и URL с токенами.
 - Тесты — **pytest**, каталог `tests/`; в приоритете модульные тесты дедупликации и фильтрации.
 
