@@ -1,0 +1,55 @@
+"""Runtime configuration loaded from environment variables and the .env file.
+
+Secrets never live in the repository: see ``.env.example`` for the template
+and ``docs/SECURITY_NOTE.md`` for the policy.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+_CRITICAL_SECRETS = ("polza_api_key", "telegram_bot_token")
+
+
+class Settings(BaseSettings):
+    """Pipeline settings. Field names map to UPPER_CASE environment variables."""
+
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    # LLM provider (note generation, context search)
+    polza_api_key: str | None = None
+
+    # Telegram
+    telegram_bot_token: str | None = None
+    telegram_channel_hep: str | None = None
+    telegram_channel_ap: str | None = None
+    telegram_moderator_chat_id: str | None = None
+
+    # Storage
+    database_url: str = "sqlite:///data/hepfeed.db"
+
+    # Misc
+    log_level: str = "INFO"
+
+    def missing_critical(self) -> list[str]:
+        """Names of secret settings that must be configured before the pipeline runs."""
+        return [name for name in _CRITICAL_SECRETS if not getattr(self, name)]
+
+    def ensure_data_dir(self) -> Path:
+        """Create the storage directory and return the database file path.
+
+        For SQLite URLs the parent directory of the database file is created;
+        otherwise a generic ``data`` directory is used.
+        """
+        if self.database_url.startswith("sqlite:///"):
+            db_path = Path(self.database_url.removeprefix("sqlite:///"))
+            db_path.parent.mkdir(parents=True, exist_ok=True)
+            return db_path
+        Path("data").mkdir(parents=True, exist_ok=True)
+        return Path("data")
