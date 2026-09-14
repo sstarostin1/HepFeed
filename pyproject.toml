@@ -1,0 +1,86 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "hepfeed"
+version = "0.1.0"
+description = "Telegram bot-agent that collects and contextualizes fresh HEP and accelerator physics publications"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.11"
+authors = [{ name = "Grestarideus" }]
+keywords = ["physics", "arxiv", "telegram", "llm", "hep", "accelerator"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Natural Language :: Russian",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Physics",
+]
+
+# Runtime dependencies of the MVP pipeline (CONCEPT.md §7).
+# Heavy/later-stage libraries (PyMuPDF, SQLAlchemy) live in extras:
+# they are installed together with the modules that need them.
+dependencies = [
+    "httpx>=0.27",
+    "feedparser>=6.0.11",
+    "python-telegram-bot>=21.0",
+    "APScheduler>=3.10,<4.0",
+    "pydantic>=2.7",
+    "pydantic-settings>=2.3",
+]
+
+[project.optional-dependencies]
+pdf = ["PyMuPDF>=1.24"]
+db = ["SQLAlchemy>=2.0"]
+dev = [
+    "pytest>=8.2",
+    "ruff>=0.8",
+    "pre-commit>=3.7",
+]
+
+[project.scripts]
+hepfeed = "hepfeed.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/sstarostin1/HepFeed"
+Documentation = "https://github.com/sstarostin1/HepFeed/tree/main/docs"
+Issues = "https://github.com/sstarostin1/HepFeed/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/hepfeed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "B",   # flake8-bugbear
+    "UP",  # pyupgrade
+    "SIM", # flake8-simplify
+    "C4",  # flake8-comprehensions
+    "RUF", # ruff-specific rules
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["hepfeed"]
+
+[tool.ruff.format]
+quote-style = "double"
