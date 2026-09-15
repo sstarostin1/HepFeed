@@ -8,8 +8,8 @@ from hepfeed import __version__
 from hepfeed.config import Settings
 from hepfeed.generation.pipeline import generate_notes_sync
 from hepfeed.ingestion.pipeline import poll_arxiv_sync
-from hepfeed.publishing.pipeline import publish_notes_sync
 from hepfeed.logging.setup import setup_logging
+from hepfeed.publishing.pipeline import publish_notes_sync
 from hepfeed.scheduler import run_scheduler
 
 _CHECKED_FIELDS: tuple[tuple[str, str], ...] = (
