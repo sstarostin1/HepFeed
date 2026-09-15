@@ -12,6 +12,9 @@ from hepfeed.config import Settings
 def test_defaults() -> None:
     settings = Settings(_env_file=None)
     assert settings.database_url == "sqlite:///data/hepfeed.db"
+    assert settings.arxiv_poll_interval_minutes == 360
+    assert settings.arxiv_poll_window_hours == 24.0
+    assert settings.arxiv_categories == "hep-ex,hep-ph,physics.acc-ph"
     assert settings.log_level == "INFO"
     assert settings.telegram_bot_token is None
     assert settings.polza_api_key is None
