@@ -34,13 +34,16 @@ def test_run_poll_job_logs_summary(
     assert "new=1" in caplog.text
 
 
-def test_build_scheduler_registers_job() -> None:
+def test_build_scheduler_registers_jobs() -> None:
     settings = Settings(_env_file=None)
     scheduler = build_scheduler(settings, interval_minutes=7)
-    job = scheduler.get_job("arxiv-poll")
-    assert job is not None
-    assert job.trigger.interval == timedelta(minutes=7)
-    assert job.next_run_time is not None
+    poll_job = scheduler.get_job("arxiv-poll")
+    assert poll_job is not None
+    assert poll_job.trigger.interval == timedelta(minutes=7)
+    assert poll_job.next_run_time is not None
+    note_job = scheduler.get_job("generate-notes")
+    assert note_job is not None
+    assert note_job.trigger.interval == timedelta(minutes=settings.notes_interval_minutes)
 
 
 def test_parse_categories() -> None:
