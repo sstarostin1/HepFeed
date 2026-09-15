@@ -29,6 +29,13 @@ class NoteRunResult:
     notes: list[tuple[PaperRecord, str]] = field(default_factory=list)
 
 
+def _model_chain(settings: Settings) -> list[str]:
+    """Primary model followed by configured fallbacks, in decreasing priority."""
+    chain = [settings.llm_model.strip()]
+    chain += [m.strip() for m in settings.llm_model_fallbacks.split(",") if m.strip()]
+    return chain
+
+
 async def generate_notes_once(
     settings: Settings,
     *,
@@ -51,7 +58,7 @@ async def generate_notes_once(
             async with LLMClient(
                 settings.polza_api_key,
                 base_url=settings.llm_base_url,
-                model=settings.llm_model,
+                models=_model_chain(settings),
             ) as llm:
                 for record in pending:
                     try:
