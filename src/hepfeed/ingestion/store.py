@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -15,6 +16,15 @@ STATUS_NOTE_CREATED = "note_created"
 """A note was generated and stored."""
 STATUS_NOTE_FAILED = "note_failed"
 """A note attempt failed; the paper stays eligible for retry."""
+
+NOTE_STATUS_READY = "ready"
+"""Note is generated but not published yet."""
+NOTE_STATUS_IN_REVIEW = "in_review"
+"""Note was sent to the moderator and awaits a decision."""
+NOTE_STATUS_PUBLISHED = "published"
+"""Note was published to a channel."""
+NOTE_STATUS_REJECTED = "rejected"
+"""Note was rejected by the moderator."""
 
 _PENDING_FOR_NOTE = (STATUS_SEEN, STATUS_NOTE_FAILED)
 
@@ -33,13 +43,25 @@ CREATE TABLE IF NOT EXISTS seen_papers (
 
 _SCHEMA_NOTES = """
 CREATE TABLE IF NOT EXISTS notes (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    dedup_key   TEXT NOT NULL,
-    note_text   TEXT NOT NULL,
-    model       TEXT,
-    created_utc TEXT NOT NULL
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    dedup_key     TEXT NOT NULL,
+    note_text     TEXT NOT NULL,
+    model         TEXT,
+    created_utc   TEXT NOT NULL,
+    status        TEXT NOT NULL DEFAULT 'ready',
+    channel       TEXT,
+    published_utc TEXT
 )
 """
+
+
+@dataclass
+class ReadyNote:
+    """A generated note bundled with its paper for publishing."""
+
+    note_id: int
+    paper: PaperRecord
+    note_text: str
 
 
 class SeenStore:
@@ -69,6 +91,13 @@ class SeenStore:
             )
         if "note_updated_utc" not in columns:
             self._conn.execute("ALTER TABLE seen_papers ADD COLUMN note_updated_utc TEXT")
+        note_columns = {row[1] for row in self._conn.execute("PRAGMA table_info(notes)")}
+        if "status" not in note_columns:
+            self._conn.execute("ALTER TABLE notes ADD COLUMN status TEXT NOT NULL DEFAULT 'ready'")
+        if "channel" not in note_columns:
+            self._conn.execute("ALTER TABLE notes ADD COLUMN channel TEXT")
+        if "published_utc" not in note_columns:
+            self._conn.execute("ALTER TABLE notes ADD COLUMN published_utc TEXT")
 
     def is_seen(self, key: str) -> bool:
         """Return True when the dedup key was stored before."""
@@ -132,6 +161,63 @@ class SeenStore:
         self._conn.execute(
             "INSERT INTO notes (dedup_key, note_text, model, created_utc) VALUES (?, ?, ?, ?)",
             (dedup_key(paper), note_text, model, datetime.now(UTC).isoformat()),
+        )
+        self._conn.commit()
+
+    def notes_ready(self, limit: int = 10) -> list[ReadyNote]:
+        """Generated notes that are not published yet, oldest first."""
+        rows = self._conn.execute(
+            "SELECT n.id, n.note_text, p.record_json FROM notes n"
+            " JOIN seen_papers p ON p.dedup_key = n.dedup_key"
+            " WHERE n.status = ? AND p.record_json IS NOT NULL"
+            " ORDER BY n.id LIMIT ?",
+            (NOTE_STATUS_READY, limit),
+        )
+        result: list[ReadyNote] = []
+        for note_id, note_text, raw in rows:
+            try:
+                paper = PaperRecord.model_validate_json(raw)
+            except ValueError:
+                continue
+            result.append(ReadyNote(note_id=int(note_id), paper=paper, note_text=note_text))
+        return result
+
+    def notes_in_review(self, limit: int = 50) -> list[tuple[int, str]]:
+        """Notes awaiting a moderator decision as (id, text) pairs."""
+        rows = self._conn.execute(
+            "SELECT id, note_text FROM notes WHERE status = ? ORDER BY id LIMIT ?",
+            (NOTE_STATUS_IN_REVIEW, limit),
+        ).fetchall()
+        return [(int(row[0]), row[1]) for row in rows]
+
+    def note_by_id(self, note_id: int) -> ReadyNote | None:
+        """Fetch a single note with its paper; None when missing or broken."""
+        row = self._conn.execute(
+            "SELECT n.note_text, p.record_json FROM notes n"
+            " JOIN seen_papers p ON p.dedup_key = n.dedup_key WHERE n.id = ?",
+            (note_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        try:
+            paper = PaperRecord.model_validate_json(row[1])
+        except ValueError:
+            return None
+        return ReadyNote(note_id=note_id, paper=paper, note_text=row[0])
+
+    def mark_note_published(self, note_id: int, channel: str) -> None:
+        """Mark a note as published to the given channel."""
+        self._conn.execute(
+            "UPDATE notes SET status = ?, channel = ?, published_utc = ? WHERE id = ?",
+            (NOTE_STATUS_PUBLISHED, channel, datetime.now(UTC).isoformat(), note_id),
+        )
+        self._conn.commit()
+
+    def mark_note_publish_status(self, note_id: int, status: str) -> None:
+        """Update the publishing status of a note (in_review / rejected)."""
+        self._conn.execute(
+            "UPDATE notes SET status = ? WHERE id = ?",
+            (status, note_id),
         )
         self._conn.commit()
 
