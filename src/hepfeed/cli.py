@@ -1,19 +1,14 @@
-"""Command-line interface: configuration diagnostics and arXiv ingestion."""
+"""Command-line interface: diagnostics, arXiv ingestion and scheduling."""
 
 from __future__ import annotations
 
 import argparse
-import asyncio
 
 from hepfeed import __version__
 from hepfeed.config import Settings
-from hepfeed.ingestion.arxiv import (
-    DEFAULT_CATEGORIES,
-    ArxivClient,
-    filter_published_within,
-)
-from hepfeed.ingestion.dedup import deduplicate
-from hepfeed.ingestion.store import SeenStore
+from hepfeed.ingestion.pipeline import poll_arxiv_sync
+from hepfeed.logging.setup import setup_logging
+from hepfeed.scheduler import run_scheduler
 
 _CHECKED_FIELDS: tuple[tuple[str, str], ...] = (
     ("POLZA_API_KEY", "LLM provider key (note generation, web search)"),
@@ -45,39 +40,38 @@ def run_check() -> int:
     return 0
 
 
-async def run_poll_arxiv(args: argparse.Namespace) -> int:
+def run_poll_arxiv(args: argparse.Namespace) -> int:
     """Fetch fresh arXiv submissions, drop duplicates, persist unseen ones."""
     settings = Settings()
     if not settings.database_url.startswith("sqlite:///"):
         print("! poll-arxiv supports SQLite storage only for now")
         return 2
-    db_path = settings.ensure_data_dir()
-    categories = [c.strip() for c in args.categories.split(",") if c.strip()]
-
-    async with ArxivClient() as client:
-        fetched = await client.fetch_recent(categories=categories, max_results=args.max_results)
-    recent = filter_published_within(fetched, hours=args.hours)
-    unique = deduplicate(recent)
-
-    if args.dry_run:
-        new_records = unique
-        print("dry-run: seen-store not updated")
-    else:
-        store = SeenStore(db_path)
-        try:
-            new_records = [record for record in unique if store.mark_seen(record)]
-        finally:
-            store.close()
-
-    print(
-        f"arXiv poll: fetched {len(fetched)}, "
-        f"within {args.hours:g}h window {len(recent)}, "
-        f"unique {len(unique)}, new {len(new_records)}"
+    raw_categories = args.categories or settings.arxiv_categories
+    result = poll_arxiv_sync(
+        settings,
+        hours=args.hours,
+        max_results=args.max_results,
+        categories=[c.strip() for c in raw_categories.split(",") if c.strip()],
+        dry_run=args.dry_run,
     )
-    for record in new_records:
+    if args.dry_run:
+        print("dry-run: seen-store not updated")
+    print(
+        f"arXiv poll: fetched {result.fetched}, "
+        f"within {args.hours:g}h window {result.recent}, "
+        f"unique {result.unique}, new {result.new}"
+    )
+    for record in result.new_records:
         cats = ",".join(record.categories[:3]) or "-"
         print(f"  [{record.arxiv_id}] {record.title} ({cats})")
     return 0
+
+
+def run_schedule(args: argparse.Namespace) -> int:
+    """Run ingestion jobs on a schedule until interrupted."""
+    settings = Settings()
+    setup_logging(settings.log_level)
+    return run_scheduler(settings, interval_minutes=args.interval_minutes)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -96,15 +90,24 @@ def main(argv: list[str] | None = None) -> int:
     poll.add_argument("--max-results", type=int, default=100, help="max entries per API request")
     poll.add_argument(
         "--categories",
-        default=",".join(DEFAULT_CATEGORIES),
-        help="comma-separated arXiv categories",
+        default=None,
+        help="comma-separated arXiv categories (default: ARXIV_CATEGORIES)",
     )
     poll.add_argument("--dry-run", action="store_true", help="do not persist into the seen-store")
+    sched = subparsers.add_parser("schedule", help="run ingestion jobs on a schedule until Ctrl+C")
+    sched.add_argument(
+        "--interval-minutes",
+        type=int,
+        default=None,
+        help="override poll interval from ARXIV_POLL_INTERVAL_MINUTES",
+    )
     args = parser.parse_args(argv)
 
     if args.command == "check":
         return run_check()
     if args.command == "poll-arxiv":
-        return asyncio.run(run_poll_arxiv(args))
+        return run_poll_arxiv(args)
+    if args.command == "schedule":
+        return run_schedule(args)
     parser.print_help()
     return 0

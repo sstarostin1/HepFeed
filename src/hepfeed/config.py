@@ -34,6 +34,11 @@ class Settings(BaseSettings):
     # Storage
     database_url: str = "sqlite:///data/hepfeed.db"
 
+    # Ingestion scheduling (CONCEPT.md section 8: delay target <= 12 hours)
+    arxiv_poll_interval_minutes: int = 360
+    arxiv_poll_window_hours: float = 24.0
+    arxiv_categories: str = "hep-ex,hep-ph,physics.acc-ph"
+
     # Misc
     log_level: str = "INFO"
 

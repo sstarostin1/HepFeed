@@ -99,3 +99,69 @@ def test_fetch_recent_parses_response() -> None:
     records = asyncio.run(scenario())
     assert len(records) == 2
     assert records[0].arxiv_id == "2609.01234"
+
+
+def test_fetch_recent_retries_on_429() -> None:
+    calls = {"count": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["count"] += 1
+        if calls["count"] < 3:
+            return httpx.Response(429)
+        return httpx.Response(200, text=FIXTURE_PATH.read_text(encoding="utf-8"))
+
+    async def scenario() -> list[PaperRecord]:
+        transport = httpx.MockTransport(handler)
+        async with ArxivClient(
+            client=httpx.AsyncClient(transport=transport),
+            request_interval_seconds=0.0,
+            max_attempts=3,
+            retry_base_seconds=0.0,
+        ) as client:
+            return await client.fetch_recent(categories=["hep-ph"], max_results=2)
+
+    records = asyncio.run(scenario())
+    assert calls["count"] == 3
+    assert len(records) == 2
+
+
+def test_fetch_recent_raises_after_final_429() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(429)
+
+    async def scenario() -> list[PaperRecord]:
+        transport = httpx.MockTransport(handler)
+        async with ArxivClient(
+            client=httpx.AsyncClient(transport=transport),
+            request_interval_seconds=0.0,
+            max_attempts=2,
+            retry_base_seconds=0.0,
+        ) as client:
+            return await client.fetch_recent(categories=["hep-ph"], max_results=2)
+
+    with pytest.raises(httpx.HTTPStatusError):
+        asyncio.run(scenario())
+
+
+def test_fetch_recent_retries_on_transport_error() -> None:
+    calls = {"count": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise httpx.ReadTimeout("simulated slow response", request=request)
+        return httpx.Response(200, text=FIXTURE_PATH.read_text(encoding="utf-8"))
+
+    async def scenario() -> list[PaperRecord]:
+        transport = httpx.MockTransport(handler)
+        async with ArxivClient(
+            client=httpx.AsyncClient(transport=transport),
+            request_interval_seconds=0.0,
+            max_attempts=3,
+            retry_base_seconds=0.0,
+        ) as client:
+            return await client.fetch_recent(categories=["hep-ph"], max_results=2)
+
+    records = asyncio.run(scenario())
+    assert calls["count"] == 2
+    assert len(records) == 2
