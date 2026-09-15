@@ -1,5 +1,7 @@
-"""Source monitoring: poll arXiv, INSPIRE, CDS, journal feeds and institutional
-repositories, create processing queue entries (docs/CONCEPT.md, section 6.1).
+"""Source monitoring and first-stage processing (docs/CONCEPT.md, section 6.1).
 
-Stub module - implementation lands with Phase 1 of the roadmap.
+Implemented: arXiv Atom poller (``hepfeed.ingestion.arxiv``), deduplication
+keys (``hepfeed.ingestion.dedup``) and the SQLite seen-store
+(``hepfeed.ingestion.store``). Remaining per docs/SOURCES.md: category list
+pages, INSPIRE / CDS / RSS / institutional sources.
 """
