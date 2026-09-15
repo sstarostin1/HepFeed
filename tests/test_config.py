@@ -18,8 +18,8 @@ def test_defaults() -> None:
     assert settings.notes_interval_minutes == 15
     assert settings.llm_base_url == "https://polza.ai/api/v1"
     assert settings.llm_model.startswith("deepseek/")
-    assert "baidu/fp8" in settings.llm_model_fallbacks
-    assert "deepseek/fp8" in settings.llm_model_fallbacks
+    assert "streamlake/fp8" in settings.llm_model_fallbacks
+    assert "deepinfra/fp8" in settings.llm_model_fallbacks
     assert settings.log_level == "INFO"
     assert settings.telegram_bot_token is None
     assert settings.polza_api_key is None
