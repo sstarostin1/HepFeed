@@ -196,7 +196,8 @@ class ArxivClient:
                     raise
                 delay = self._retry_base_seconds * 2 ** (attempt - 1)
                 logger.warning(
-                    "arXiv API transport error: %s (attempt %d/%d), retrying in %.0fs",
+                    "arXiv API transport error: %s: %s (attempt %d/%d), retrying in %.0fs",
+                    type(exc).__name__,
                     exc,
                     attempt,
                     self._max_attempts,
