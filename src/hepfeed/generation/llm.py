@@ -140,7 +140,8 @@ class LLMClient:
         except (KeyError, IndexError, TypeError, ValueError) as exc:
             raise LLMError(f"unexpected LLM response payload: {exc}") from exc
         if not isinstance(content, str) or not content.strip():
-            reasoning = choice.get("message", {}).get("reasoning_content")
+            message = choice.get("message", {})
+            reasoning = message.get("reasoning_content") or message.get("reasoning")
             hint = (
                 "reasoning present - final answer likely truncated by max_tokens"
                 if reasoning
