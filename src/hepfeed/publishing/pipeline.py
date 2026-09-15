@@ -15,7 +15,6 @@ from typing import TYPE_CHECKING
 from hepfeed.config import Settings
 from hepfeed.ingestion.store import (
     NOTE_STATUS_IN_REVIEW,
-    NOTE_STATUS_PUBLISHED,
     NOTE_STATUS_REJECTED,
     ReadyNote,
     SeenStore,
@@ -123,7 +122,7 @@ async def _publish_ready(
                 failed += 1
                 logger.warning("moderator send failed for note %d: %s", note.note_id, exc)
                 continue
-            store.mark_note_status(note.note_id, NOTE_STATUS_IN_REVIEW)
+            store.mark_note_publish_status(note.note_id, NOTE_STATUS_IN_REVIEW)
             sent_for_review += 1
             continue
 
@@ -142,13 +141,9 @@ async def _publish_ready(
             logger.warning("publish failed for note %d: %s", note.note_id, exc)
             continue
         store.mark_note_published(note.note_id, channel)
-        logger.info(
-            "note %d published to %s (message %d)", note.note_id, channel, message_id
-        )
+        logger.info("note %d published to %s (message %d)", note.note_id, channel, message_id)
         published += 1
-    return PublishRunResult(
-        published=published, sent_for_review=sent_for_review, failed=failed
-    )
+    return PublishRunResult(published=published, sent_for_review=sent_for_review, failed=failed)
 
 
 async def _apply_decision(
@@ -166,7 +161,7 @@ async def _apply_decision(
         return PublishRunResult(failed=1)
     if not approve:
         if not dry_run:
-            store.mark_note_status(note_id, NOTE_STATUS_REJECTED)
+            store.mark_note_publish_status(note_id, NOTE_STATUS_REJECTED)
         logger.info("note %d rejected", note_id)
         return PublishRunResult(rejected=1)
     channel = _resolve_channel(settings, note)
@@ -195,7 +190,5 @@ def publish_notes_sync(
 ) -> PublishRunResult:
     """Synchronous wrapper around :func:`publish_notes_once` (for CLI and jobs)."""
     return asyncio.run(
-        publish_notes_once(
-            settings, limit=limit, dry_run=dry_run, approve=approve, reject=reject
-        )
+        publish_notes_once(settings, limit=limit, dry_run=dry_run, approve=approve, reject=reject)
     )

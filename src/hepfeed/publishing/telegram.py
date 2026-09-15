@@ -9,6 +9,9 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
+TELEGRAM_API_URL = "https://api.telegram.org"
+"""Root of the Telegram Bot API."""
+
 
 class TelegramError(RuntimeError):
     """Raised when the Telegram API fails after retries."""
@@ -25,6 +28,7 @@ class TelegramClient:
         self,
         api_token: str,
         *,
+        base_url: str = TELEGRAM_API_URL,
         client: httpx.AsyncClient | None = None,
         timeout_seconds: float = 30.0,
         max_attempts: int = 3,
@@ -34,7 +38,7 @@ class TelegramClient:
         self._max_attempts = max_attempts
         self._retry_base_seconds = retry_base_seconds
         self._owns_client = client is None
-        self._client = client or httpx.AsyncClient(timeout=timeout_seconds)
+        self._client = client or httpx.AsyncClient(base_url=base_url, timeout=timeout_seconds)
 
     async def __aenter__(self) -> TelegramClient:
         return self
