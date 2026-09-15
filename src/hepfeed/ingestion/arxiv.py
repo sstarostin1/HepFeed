@@ -7,6 +7,7 @@ but expects polite pacing (roughly one request per 3 seconds).
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 import time
 from collections.abc import Sequence
@@ -30,6 +31,10 @@ _ARXIV_ID_RE = re.compile(
     r"^(?P<base>[a-z-]+/\d{7}|\d{4}\.\d{4,5})(?:v(?P<ver>\d+))?$",
     re.IGNORECASE,
 )
+
+logger = logging.getLogger(__name__)
+
+_RETRYABLE_STATUS_CODES = frozenset({429, 500, 502, 503, 504})
 
 
 def build_search_query(categories: Sequence[str]) -> str:
@@ -131,6 +136,8 @@ class ArxivClient:
         client: httpx.AsyncClient | None = None,
         request_interval_seconds: float = 3.0,
         timeout_seconds: float = 30.0,
+        max_attempts: int = 4,
+        retry_base_seconds: float = 3.0,
     ) -> None:
         self._owns_client = client is None
         self._client = client or httpx.AsyncClient(
@@ -140,6 +147,8 @@ class ArxivClient:
         )
         self._request_interval = request_interval_seconds
         self._last_request: float | None = None
+        self._max_attempts = max_attempts
+        self._retry_base_seconds = retry_base_seconds
 
     async def __aenter__(self) -> ArxivClient:
         return self
@@ -165,16 +174,49 @@ class ArxivClient:
         categories: Sequence[str] = DEFAULT_CATEGORIES,
         max_results: int = 100,
     ) -> list[PaperRecord]:
-        """Fetch the newest submissions in the given categories."""
-        await self._throttle()
-        response = await self._client.get(
-            ARXIV_API_URL,
-            params={
-                "search_query": build_search_query(categories),
-                "sortBy": "submittedDate",
-                "sortOrder": "descending",
-                "max_results": str(max_results),
-            },
-        )
+        """Fetch the newest submissions in the given categories.
+
+        Transient failures (HTTP 429/5xx and transport errors) are retried
+        with exponential backoff: arXiv throttles clients that burst requests.
+        """
+        for attempt in range(1, self._max_attempts + 1):
+            await self._throttle()
+            try:
+                response = await self._client.get(
+                    ARXIV_API_URL,
+                    params={
+                        "search_query": build_search_query(categories),
+                        "sortBy": "submittedDate",
+                        "sortOrder": "descending",
+                        "max_results": str(max_results),
+                    },
+                )
+            except httpx.TransportError as exc:
+                if attempt == self._max_attempts:
+                    raise
+                delay = self._retry_base_seconds * 2 ** (attempt - 1)
+                logger.warning(
+                    "arXiv API transport error: %s (attempt %d/%d), retrying in %.0fs",
+                    exc,
+                    attempt,
+                    self._max_attempts,
+                    delay,
+                )
+                await asyncio.sleep(delay)
+                continue
+            if response.status_code not in _RETRYABLE_STATUS_CODES:
+                response.raise_for_status()
+                return parse_atom_feed(response.text)
+            if attempt == self._max_attempts:
+                break
+            delay = self._retry_base_seconds * 2 ** (attempt - 1)
+            logger.warning(
+                "arXiv API returned HTTP %d (attempt %d/%d), retrying in %.0fs",
+                response.status_code,
+                attempt,
+                self._max_attempts,
+                delay,
+            )
+            await asyncio.sleep(delay)
         response.raise_for_status()
         return parse_atom_feed(response.text)
