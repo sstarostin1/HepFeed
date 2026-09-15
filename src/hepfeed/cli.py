@@ -6,6 +6,7 @@ import argparse
 
 from hepfeed import __version__
 from hepfeed.config import Settings
+from hepfeed.generation.pipeline import generate_notes_sync
 from hepfeed.ingestion.pipeline import poll_arxiv_sync
 from hepfeed.logging.setup import setup_logging
 from hepfeed.scheduler import run_scheduler
@@ -74,6 +75,27 @@ def run_schedule(args: argparse.Namespace) -> int:
     return run_scheduler(settings, interval_minutes=args.interval_minutes)
 
 
+def run_generate_notes(args: argparse.Namespace) -> int:
+    """Generate notes for stored papers that lack one."""
+    settings = Settings()
+    if not settings.polza_api_key:
+        print("! POLZA_API_KEY is not set (see .env.example)")
+        return 2
+    if not settings.database_url.startswith("sqlite:///"):
+        print("! generate-notes supports SQLite storage only for now")
+        return 2
+    result = generate_notes_sync(settings, limit=args.limit, dry_run=args.dry_run)
+    if args.dry_run:
+        print("dry-run: notes and statuses not persisted")
+    print(
+        f"note generation: generated {result.generated}, failed {result.failed}, "
+        f"pending left {result.pending_left}"
+    )
+    for record, note in result.notes:
+        print(f"\n===== {record.arxiv_id} =====\n{note}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     """CLI entry point."""
     parser = argparse.ArgumentParser(
@@ -101,6 +123,11 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="override poll interval from ARXIV_POLL_INTERVAL_MINUTES",
     )
+    gen = subparsers.add_parser(
+        "generate-notes", help="create notes for stored papers that lack one"
+    )
+    gen.add_argument("--limit", type=int, default=5, help="max papers per run")
+    gen.add_argument("--dry-run", action="store_true", help="do not persist notes and statuses")
     args = parser.parse_args(argv)
 
     if args.command == "check":
@@ -109,5 +136,7 @@ def main(argv: list[str] | None = None) -> int:
         return run_poll_arxiv(args)
     if args.command == "schedule":
         return run_schedule(args)
+    if args.command == "generate-notes":
+        return run_generate_notes(args)
     parser.print_help()
     return 0

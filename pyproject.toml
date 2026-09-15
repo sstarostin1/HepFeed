@@ -82,5 +82,9 @@ select = [
 [tool.ruff.lint.isort]
 known-first-party = ["hepfeed"]
 
+[tool.ruff.lint.per-file-ignores]
+# Russian LLM prompts are Cyrillic by design (language policy in AGENTS.md)
+"src/hepfeed/generation/prompt.py" = ["RUF001", "RUF002", "RUF003"]
+
 [tool.ruff.format]
 quote-style = "double"

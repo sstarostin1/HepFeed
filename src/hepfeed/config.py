@@ -24,6 +24,8 @@ class Settings(BaseSettings):
 
     # LLM provider (note generation, context search)
     polza_api_key: str | None = None
+    llm_base_url: str = "https://polza.ai/api/v1"
+    llm_model: str = "deepseek/deepseek-v4-flash-0731@provider=open-inference/fp8"
 
     # Telegram
     telegram_bot_token: str | None = None
@@ -38,6 +40,7 @@ class Settings(BaseSettings):
     arxiv_poll_interval_minutes: int = 360
     arxiv_poll_window_hours: float = 24.0
     arxiv_categories: str = "hep-ex,hep-ph,physics.acc-ph"
+    notes_interval_minutes: int = 15
 
     # Misc
     log_level: str = "INFO"
