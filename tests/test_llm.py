@@ -15,11 +15,13 @@ _BASE_URL = "https://llm.test/v1"
 
 def _client(handler, **kwargs: object) -> LLMClient:
     transport = httpx.MockTransport(handler)
+    params: dict[str, object] = {"models": ("test-model",)}
+    params.update(kwargs)
     return LLMClient(
         "test-key",
         base_url=_BASE_URL,
         client=httpx.AsyncClient(transport=transport, base_url=_BASE_URL),
-        **kwargs,  # type: ignore[arg-type]
+        **params,  # type: ignore[arg-type]
     )
 
 
@@ -43,7 +45,7 @@ def test_complete_returns_content() -> None:
     assert asyncio.run(scenario()) == "готовая заметка"
     assert seen["auth"] == "Bearer test-key"
     assert seen["path"] == "/v1/chat/completions"
-    assert isinstance(seen["model"], str) and "deepseek" in seen["model"]
+    assert seen["model"] == "test-model"
 
 
 def test_complete_retries_on_429() -> None:
@@ -101,3 +103,45 @@ def test_complete_raises_on_empty_content() -> None:
 
     with pytest.raises(LLMError, match="empty content"):
         asyncio.run(scenario())
+
+
+def test_complete_falls_back_on_persistent_failure() -> None:
+    calls: dict[str, int] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        model = json.loads(request.content)["model"]
+        calls[model] = calls.get(model, 0) + 1
+        if model == "bad-model":
+            return httpx.Response(500, json={"ok": False})
+        return _ok_body("fallback answer")
+
+    async def scenario() -> str:
+        async with _client(
+            handler,
+            models=("bad-model", "good-model"),
+            max_attempts=2,
+            retry_base_seconds=0.0,
+        ) as llm:
+            return await llm.complete("s", "u")
+
+    assert asyncio.run(scenario()) == "fallback answer"
+    assert calls == {"bad-model": 2, "good-model": 1}
+
+
+def test_complete_falls_back_on_empty_content() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        model = json.loads(request.content)["model"]
+        if model == "empty-model":
+            return _ok_body("   ")
+        return _ok_body("ok answer")
+
+    async def scenario() -> str:
+        async with _client(
+            handler,
+            models=("empty-model", "good-model"),
+            max_attempts=2,
+            retry_base_seconds=0.0,
+        ) as llm:
+            return await llm.complete("s", "u")
+
+    assert asyncio.run(scenario()) == "ok answer"
