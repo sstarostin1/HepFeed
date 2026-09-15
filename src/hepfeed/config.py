@@ -26,6 +26,10 @@ class Settings(BaseSettings):
     polza_api_key: str | None = None
     llm_base_url: str = "https://polza.ai/api/v1"
     llm_model: str = "deepseek/deepseek-v4-flash-0731@provider=open-inference/fp8"
+    llm_model_fallbacks: str = (
+        "deepseek/deepseek-v4-flash-0731@provider=baidu/fp8,"
+        "deepseek/deepseek-v4-flash-0731@provider=deepseek/fp8"
+    )
 
     # Telegram
     telegram_bot_token: str | None = None
