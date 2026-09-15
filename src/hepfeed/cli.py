@@ -1,4 +1,4 @@
-"""Command-line interface: diagnostics, arXiv ingestion and scheduling."""
+"""Command-line interface: diagnostics, ingestion, generation, publishing, scheduling."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ from hepfeed import __version__
 from hepfeed.config import Settings
 from hepfeed.generation.pipeline import generate_notes_sync
 from hepfeed.ingestion.pipeline import poll_arxiv_sync
+from hepfeed.publishing.pipeline import publish_notes_sync
 from hepfeed.logging.setup import setup_logging
 from hepfeed.scheduler import run_scheduler
 
@@ -96,6 +97,31 @@ def run_generate_notes(args: argparse.Namespace) -> int:
     return 0
 
 
+def run_publish_notes(args: argparse.Namespace) -> int:
+    """Publish ready notes, or apply a moderator decision."""
+    settings = Settings()
+    if not settings.telegram_bot_token:
+        print("! TELEGRAM_BOT_TOKEN is not set (see .env.example)")
+        return 2
+    if not settings.database_url.startswith("sqlite:///"):
+        print("! publish supports SQLite storage only for now")
+        return 2
+    result = publish_notes_sync(
+        settings,
+        limit=args.limit,
+        dry_run=args.dry_run,
+        approve=args.approve,
+        reject=args.reject,
+    )
+    if args.dry_run:
+        print("dry-run: statuses not persisted")
+    print(
+        f"publish: published {result.published}, review {result.sent_for_review}, "
+        f"failed {result.failed}, approved {result.approved}, rejected {result.rejected}"
+    )
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     """CLI entry point."""
     parser = argparse.ArgumentParser(
@@ -128,6 +154,25 @@ def main(argv: list[str] | None = None) -> int:
     )
     gen.add_argument("--limit", type=int, default=5, help="max papers per run")
     gen.add_argument("--dry-run", action="store_true", help="do not persist notes and statuses")
+    pub = subparsers.add_parser(
+        "publish", help="publish ready notes to channels (or send to moderation)"
+    )
+    pub.add_argument("--limit", type=int, default=10, help="max notes per run")
+    pub.add_argument("--dry-run", action="store_true", help="do not send or persist anything")
+    pub.add_argument(
+        "--approve",
+        type=int,
+        default=None,
+        metavar="NOTE_ID",
+        help="publish a reviewed note by id",
+    )
+    pub.add_argument(
+        "--reject",
+        type=int,
+        default=None,
+        metavar="NOTE_ID",
+        help="reject a reviewed note by id",
+    )
     args = parser.parse_args(argv)
 
     if args.command == "check":
@@ -138,5 +183,7 @@ def main(argv: list[str] | None = None) -> int:
         return run_schedule(args)
     if args.command == "generate-notes":
         return run_generate_notes(args)
+    if args.command == "publish":
+        return run_publish_notes(args)
     parser.print_help()
     return 0

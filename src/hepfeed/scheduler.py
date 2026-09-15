@@ -1,4 +1,4 @@
-"""Periodic scheduling of ingestion and note-generation jobs (APScheduler v3)."""
+"""Periodic scheduling of ingestion, generation and publishing jobs (APScheduler v3)."""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 from hepfeed.config import Settings
 from hepfeed.generation.pipeline import generate_notes_sync
 from hepfeed.ingestion.pipeline import poll_arxiv_sync
+from hepfeed.publishing.pipeline import publish_notes_sync
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +61,24 @@ def run_note_job(settings: Settings) -> None:
     )
 
 
+def run_publish_job(settings: Settings) -> None:
+    """Scheduler job body: publish ready notes (or send to moderator)."""
+    if not settings.telegram_bot_token:
+        logger.warning("publishing skipped: TELEGRAM_BOT_TOKEN not set")
+        return
+    try:
+        result = publish_notes_sync(settings, limit=10)
+    except Exception:
+        logger.exception("publish job failed")
+        return
+    logger.info(
+        "publish done: published=%d review=%d failed=%d",
+        result.published,
+        result.sent_for_review,
+        result.failed,
+    )
+
+
 def build_scheduler(settings: Settings, interval_minutes: int | None = None) -> BlockingScheduler:
     """Create a configured (not yet started) blocking scheduler."""
     minutes = interval_minutes or settings.arxiv_poll_interval_minutes
@@ -84,6 +103,16 @@ def build_scheduler(settings: Settings, interval_minutes: int | None = None) -> 
         coalesce=True,
         misfire_grace_time=60,
         name="note generation",
+    )
+    scheduler.add_job(
+        run_publish_job,
+        args=(settings,),
+        trigger=IntervalTrigger(minutes=settings.publish_interval_minutes, timezone="UTC"),
+        id="publish-notes",
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=60,
+        name="note publishing",
     )
     return scheduler
 

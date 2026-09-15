@@ -41,6 +41,8 @@ class Settings(BaseSettings):
     arxiv_poll_window_hours: float = 24.0
     arxiv_categories: str = "hep-ex,hep-ph,physics.acc-ph"
     notes_interval_minutes: int = 15
+    publish_interval_minutes: int = 10
+    publish_moderation: bool = False
 
     # Misc
     log_level: str = "INFO"
