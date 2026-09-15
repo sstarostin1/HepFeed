@@ -20,8 +20,8 @@ _RETRYABLE_STATUS_CODES = frozenset({429, 500, 502, 503, 504})
 
 DEFAULT_MODEL_CHAIN: tuple[str, ...] = (
     "deepseek/deepseek-v4-flash-0731@provider=open-inference/fp8",
-    "deepseek/deepseek-v4-flash-0731@provider=baidu/fp8",
-    "deepseek/deepseek-v4-flash-0731@provider=deepseek/fp8",
+    "deepseek/deepseek-v4-flash-0731@provider=streamlake/fp8",
+    "deepseek/deepseek-v4-flash-0731@provider=deepinfra/fp8",
 )
 """Primary model followed by fallbacks, in decreasing priority."""
 

@@ -27,8 +27,8 @@ class Settings(BaseSettings):
     llm_base_url: str = "https://polza.ai/api/v1"
     llm_model: str = "deepseek/deepseek-v4-flash-0731@provider=open-inference/fp8"
     llm_model_fallbacks: str = (
-        "deepseek/deepseek-v4-flash-0731@provider=baidu/fp8,"
-        "deepseek/deepseek-v4-flash-0731@provider=deepseek/fp8"
+        "deepseek/deepseek-v4-flash-0731@provider=streamlake/fp8,"
+        "deepseek/deepseek-v4-flash-0731@provider=deepinfra/fp8"
     )
 
     # Telegram
