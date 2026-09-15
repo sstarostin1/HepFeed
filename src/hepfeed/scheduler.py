@@ -1,4 +1,4 @@
-"""Periodic scheduling of ingestion jobs (APScheduler v3, docs/CONCEPT.md, section 7)."""
+"""Periodic scheduling of ingestion and note-generation jobs (APScheduler v3)."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ from apscheduler.schedulers.blocking import BlockingScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 
 from hepfeed.config import Settings
+from hepfeed.generation.pipeline import generate_notes_sync
 from hepfeed.ingestion.pipeline import poll_arxiv_sync
 
 logger = logging.getLogger(__name__)
@@ -41,6 +42,24 @@ def run_poll_job(settings: Settings) -> None:
     )
 
 
+def run_note_job(settings: Settings) -> None:
+    """Scheduler job body: generate notes for papers that lack one."""
+    if not settings.polza_api_key:
+        logger.warning("note generation skipped: POLZA_API_KEY not set")
+        return
+    try:
+        result = generate_notes_sync(settings, limit=5)
+    except Exception:
+        logger.exception("note generation job failed")
+        return
+    logger.info(
+        "note generation done: generated=%d failed=%d pending=%d",
+        result.generated,
+        result.failed,
+        result.pending_left,
+    )
+
+
 def build_scheduler(settings: Settings, interval_minutes: int | None = None) -> BlockingScheduler:
     """Create a configured (not yet started) blocking scheduler."""
     minutes = interval_minutes or settings.arxiv_poll_interval_minutes
@@ -55,6 +74,16 @@ def build_scheduler(settings: Settings, interval_minutes: int | None = None) -> 
         coalesce=True,
         misfire_grace_time=60,
         name="arXiv ingestion poll",
+    )
+    scheduler.add_job(
+        run_note_job,
+        args=(settings,),
+        trigger=IntervalTrigger(minutes=settings.notes_interval_minutes, timezone="UTC"),
+        id="generate-notes",
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=60,
+        name="note generation",
     )
     return scheduler
 
