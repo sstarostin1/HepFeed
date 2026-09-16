@@ -47,9 +47,11 @@ class LLMClient:
         timeout_seconds: float = 300.0,
         max_attempts: int = 3,
         retry_base_seconds: float = 3.0,
+        extra_body: dict[str, object] | None = None,
     ) -> None:
         self._api_key = api_key
         self._models = list(models)
+        self._extra_body = dict(extra_body or {})
         self._max_attempts = max_attempts
         self._retry_base_seconds = retry_base_seconds
         self._owns_client = client is None
@@ -90,6 +92,7 @@ class LLMClient:
             ],
             "temperature": temperature,
             "max_tokens": max_tokens,
+            **self._extra_body,
         }
         failures: list[str] = []
         for model in self._models:

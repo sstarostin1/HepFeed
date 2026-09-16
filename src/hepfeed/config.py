@@ -30,6 +30,7 @@ class Settings(BaseSettings):
         "deepseek/deepseek-v4-flash-0731@provider=streamlake/fp8,"
         "deepseek/deepseek-v4-flash-0731@provider=deepinfra/fp8"
     )
+    llm_reasoning_effort: str = "low"
 
     # Telegram
     telegram_bot_token: str | None = None

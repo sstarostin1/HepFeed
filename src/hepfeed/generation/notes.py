@@ -47,7 +47,7 @@ async def generate_note(record: PaperRecord, llm: LLMClient) -> str:
     """Generate a note for the paper and enforce the hard format checks."""
     system, user = build_note_messages(record)
     # generous budget: reasoning models spend tokens before the final answer
-    note = await llm.complete(system, user, max_tokens=6000, temperature=0.3)
+    note = await llm.complete(system, user, max_tokens=10000, temperature=0.3)
     issues = validate_note(note, record)
     if issues:
         raise NoteValidationError("; ".join(issues))
