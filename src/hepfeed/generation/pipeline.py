@@ -55,12 +55,27 @@ async def generate_notes_once(
         failed = 0
         notes: list[tuple[PaperRecord, str]] = []
         if pending:
+            extra_body = (
+                {"reasoning_effort": settings.llm_reasoning_effort}
+                if settings.llm_reasoning_effort.strip()
+                else None
+            )
             async with LLMClient(
                 settings.polza_api_key,
                 base_url=settings.llm_base_url,
                 models=_model_chain(settings),
+                extra_body=extra_body,
             ) as llm:
                 for record in pending:
+                    if not record.abstract.strip():
+                        # An empty input makes the task unsatisfiable and sends
+                        # reasoning models into a loop; leave the paper pending
+                        # so a future enrichment pass can fill the data in.
+                        logger.warning(
+                            "skip %s: empty abstract, waiting for enrichment",
+                            record.arxiv_id,
+                        )
+                        continue
                     try:
                         note = await generate_note(record, llm)
                     except (LLMError, NoteValidationError) as exc:
