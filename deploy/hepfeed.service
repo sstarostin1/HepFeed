@@ -1,0 +1,16 @@
+[Unit]
+Description=HepFeed pipeline scheduler (arXiv ingestion, note generation, publishing)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/hepfeed
+ExecStart=/opt/hepfeed/.venv/bin/python -m hepfeed schedule
+Restart=on-failure
+RestartSec=30
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
