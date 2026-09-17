@@ -44,8 +44,11 @@ m_H = 125.11 ± 0.11 GeV).
 """
 
 
-def build_user_prompt(record: PaperRecord) -> str:
-    """Render the article data the model is allowed to rely on."""
+def build_user_prompt(record: PaperRecord, full_text: str | None = None) -> str:
+    """Render the article data the model is allowed to rely on.
+
+    ``full_text`` replaces the abstract section when available.
+    """
     authors = ", ".join(record.authors[:5]) or "неизвестны"
     if len(record.authors) > 5:
         authors += " и др."
@@ -53,20 +56,20 @@ def build_user_prompt(record: PaperRecord) -> str:
     abs_url = record.abs_url or (
         f"https://arxiv.org/abs/{record.arxiv_id}" if record.arxiv_id else "нет"
     )
-    return "\n".join(
-        [
-            "Статья:",
-            f"Заголовок: {record.title}",
-            f"Авторы: {authors}",
-            f"arXiv ID: {record.arxiv_id or 'нет'} ({abs_url})",
-            f"DOI: {record.doi or 'нет'}",
-            f"Категории arXiv: {', '.join(record.categories) or 'нет'}",
-            f"Первичная категория: {record.primary_category or 'нет'}",
-            f"Опубликована: {published}",
-            "",
-            "Абстракт:",
-            record.abstract or "(абстракт отсутствует)",
-            "",
-            "Напиши заметку по правилам системного сообщения.",
-        ]
-    )
+    body = [
+        "Статья:",
+        f"Заголовок: {record.title}",
+        f"Авторы: {authors}",
+        f"arXiv ID: {record.arxiv_id or 'нет'} ({abs_url})",
+        f"DOI: {record.doi or 'нет'}",
+        f"Категории arXiv: {', '.join(record.categories) or 'нет'}",
+        f"Первичная категория: {record.primary_category or 'нет'}",
+        f"Опубликована: {published}",
+        "",
+    ]
+    if full_text:
+        body.extend(["Полный текст статьи:", full_text])
+    else:
+        body.extend(["Абстракт:", record.abstract or "(абстракт отсутствует)"])
+    body.extend(["", "Напиши заметку по правилам системного сообщения."])
+    return "\n".join(body)
