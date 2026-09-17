@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from apscheduler.schedulers.blocking import BlockingScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 
+from hepfeed.admin import AdminListener, PauseFlag
 from hepfeed.config import Settings
 from hepfeed.generation.pipeline import generate_notes_sync
 from hepfeed.ingestion.pipeline import poll_arxiv_sync
@@ -22,8 +23,11 @@ def _parse_categories(raw: str) -> list[str]:
     return [c.strip() for c in raw.split(",") if c.strip()]
 
 
-def run_poll_job(settings: Settings) -> None:
+def run_poll_job(settings: Settings, flag: PauseFlag) -> None:
     """Scheduler job body: one arXiv poll cycle with error logging."""
+    if flag.is_set():
+        logger.info("paused: arXiv poll skipped")
+        return
     try:
         result = poll_arxiv_sync(
             settings,
@@ -43,8 +47,11 @@ def run_poll_job(settings: Settings) -> None:
     )
 
 
-def run_note_job(settings: Settings) -> None:
+def run_note_job(settings: Settings, flag: PauseFlag) -> None:
     """Scheduler job body: generate notes for papers that lack one."""
+    if flag.is_set():
+        logger.info("paused: note generation skipped")
+        return
     if not settings.polza_api_key:
         logger.warning("note generation skipped: POLZA_API_KEY not set")
         return
@@ -61,8 +68,11 @@ def run_note_job(settings: Settings) -> None:
     )
 
 
-def run_publish_job(settings: Settings) -> None:
+def run_publish_job(settings: Settings, flag: PauseFlag) -> None:
     """Scheduler job body: publish ready notes (or send to moderator)."""
+    if flag.is_set():
+        logger.info("paused: publishing skipped")
+        return
     if not settings.telegram_bot_token:
         logger.warning("publishing skipped: TELEGRAM_BOT_TOKEN not set")
         return
@@ -79,13 +89,18 @@ def run_publish_job(settings: Settings) -> None:
     )
 
 
-def build_scheduler(settings: Settings, interval_minutes: int | None = None) -> BlockingScheduler:
+def build_scheduler(
+    settings: Settings,
+    interval_minutes: int | None = None,
+    flag: PauseFlag | None = None,
+) -> BlockingScheduler:
     """Create a configured (not yet started) blocking scheduler."""
     minutes = interval_minutes or settings.arxiv_poll_interval_minutes
+    pause = flag or PauseFlag()
     scheduler = BlockingScheduler(timezone="UTC")
     scheduler.add_job(
         run_poll_job,
-        args=(settings,),
+        args=(settings, pause),
         trigger=IntervalTrigger(minutes=minutes, timezone="UTC"),
         next_run_time=datetime.now(UTC),
         id=_JOB_ID,
@@ -96,7 +111,7 @@ def build_scheduler(settings: Settings, interval_minutes: int | None = None) -> 
     )
     scheduler.add_job(
         run_note_job,
-        args=(settings,),
+        args=(settings, pause),
         trigger=IntervalTrigger(minutes=settings.notes_interval_minutes, timezone="UTC"),
         id="generate-notes",
         max_instances=1,
@@ -106,7 +121,7 @@ def build_scheduler(settings: Settings, interval_minutes: int | None = None) -> 
     )
     scheduler.add_job(
         run_publish_job,
-        args=(settings,),
+        args=(settings, pause),
         trigger=IntervalTrigger(minutes=settings.publish_interval_minutes, timezone="UTC"),
         id="publish-notes",
         max_instances=1,
@@ -120,7 +135,9 @@ def build_scheduler(settings: Settings, interval_minutes: int | None = None) -> 
 def run_scheduler(settings: Settings, interval_minutes: int | None = None) -> int:
     """Start the blocking scheduler and block until interrupted."""
     minutes = interval_minutes or settings.arxiv_poll_interval_minutes
-    scheduler = build_scheduler(settings, interval_minutes)
+    flag = PauseFlag()
+    scheduler = build_scheduler(settings, interval_minutes, flag)
+    AdminListener(settings, flag).start()
     logger.info("scheduler starting: arXiv poll every %d minute(s); Ctrl+C to stop", minutes)
     try:
         scheduler.start()
