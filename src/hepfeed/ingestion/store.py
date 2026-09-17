@@ -37,7 +37,8 @@ CREATE TABLE IF NOT EXISTS seen_papers (
     first_seen_utc   TEXT NOT NULL,
     record_json      TEXT,
     note_status      TEXT NOT NULL DEFAULT 'seen',
-    note_updated_utc TEXT
+    note_updated_utc TEXT,
+    full_text        TEXT
 )
 """
 
@@ -91,6 +92,8 @@ class SeenStore:
             )
         if "note_updated_utc" not in columns:
             self._conn.execute("ALTER TABLE seen_papers ADD COLUMN note_updated_utc TEXT")
+        if "full_text" not in columns:
+            self._conn.execute("ALTER TABLE seen_papers ADD COLUMN full_text TEXT")
         note_columns = {row[1] for row in self._conn.execute("PRAGMA table_info(notes)")}
         if "status" not in note_columns:
             self._conn.execute("ALTER TABLE notes ADD COLUMN status TEXT NOT NULL DEFAULT 'ready'")
@@ -220,6 +223,42 @@ class SeenStore:
             (status, note_id),
         )
         self._conn.commit()
+
+    def set_full_text(self, paper: PaperRecord, full_text: str) -> None:
+        """Cache the extracted full article text for later note runs."""
+        self._conn.execute(
+            "UPDATE seen_papers SET full_text = ? WHERE dedup_key = ?",
+            (full_text, dedup_key(paper)),
+        )
+        self._conn.commit()
+
+    def get_full_text(self, key: str) -> str | None:
+        """Cached full article text for the paper, if it was fetched before."""
+        row = self._conn.execute(
+            "SELECT full_text FROM seen_papers WHERE dedup_key = ?", (key,)
+        ).fetchone()
+        if row is None or row[0] is None:
+            return None
+        return str(row[0])
+
+    def stats(self) -> dict[str, int]:
+        """Aggregate counters for the operator console."""
+
+        def one(sql: str) -> int:
+            return int(self._conn.execute(sql).fetchone()[0])
+
+        return {
+            "papers": one("SELECT COUNT(*) FROM seen_papers"),
+            "papers_pending_note": one(
+                "SELECT COUNT(*) FROM seen_papers"
+                " WHERE note_status IN ('seen', 'note_failed')"
+                " AND record_json IS NOT NULL"
+            ),
+            "notes_ready": one("SELECT COUNT(*) FROM notes WHERE status = 'ready'"),
+            "notes_in_review": one("SELECT COUNT(*) FROM notes WHERE status = 'in_review'"),
+            "notes_published": one("SELECT COUNT(*) FROM notes WHERE status = 'published'"),
+            "notes_rejected": one("SELECT COUNT(*) FROM notes WHERE status = 'rejected'"),
+        }
 
     def count(self) -> int:
         """Number of stored papers (handy for tests and diagnostics)."""
