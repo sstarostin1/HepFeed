@@ -76,3 +76,20 @@ def test_legacy_db_is_migrated(tmp_path: Path) -> None:
         assert store.pending_count() == 1
     finally:
         store.close()
+
+
+def test_stats_and_full_text_cache(tmp_path: Path) -> None:
+    store = SeenStore(tmp_path / "hepfeed.sqlite")
+    try:
+        paper = PaperRecord(arxiv_id="2609.00111", title="T", abstract="A")
+        store.mark_seen(paper)
+        store.save_note(paper, "note", "m")
+        store.set_full_text(paper, "full text body")
+        stats = store.stats()
+        assert stats["papers"] == 1
+        assert stats["papers_pending_note"] == 1
+        assert stats["notes_ready"] == 1
+        assert stats["notes_published"] == 0
+        assert store.get_full_text("arxiv:2609.00111") == "full text body"
+    finally:
+        store.close()

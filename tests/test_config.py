@@ -16,6 +16,9 @@ def test_defaults() -> None:
     assert settings.arxiv_poll_window_hours == 24.0
     assert settings.arxiv_categories == "hep-ex,hep-ph,physics.acc-ph"
     assert settings.notes_interval_minutes == 15
+    assert settings.publish_interval_minutes == 10
+    assert settings.llm_use_full_text is True
+    assert settings.llm_full_text_max_chars == 150_000
     assert settings.llm_base_url == "https://polza.ai/api/v1"
     assert settings.llm_model.startswith("deepseek/")
     assert "streamlake/fp8" in settings.llm_model_fallbacks
