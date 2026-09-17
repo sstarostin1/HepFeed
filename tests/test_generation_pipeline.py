@@ -50,7 +50,11 @@ def _seed(store: SeenStore, arxiv_id: str) -> None:
 
 
 def _settings() -> Settings:
-    return Settings(_env_file=None, polza_api_key="test-key")
+    return Settings(
+        _env_file=None,
+        polza_api_key="test-key",
+        llm_use_full_text=False,
+    )
 
 
 def test_generate_notes_once_persists(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -137,3 +141,31 @@ def test_generate_notes_sync_wrapper(monkeypatch: pytest.MonkeyPatch, tmp_path: 
     result = generate_notes_sync(_settings(), limit=5)
 
     assert result.generated == 1
+
+
+def test_generate_notes_uses_full_text(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("hepfeed.generation.pipeline.LLMClient", _FakeLLM)
+
+    async def fake_fetch(
+        arxiv_id: str, *, version: str | None = None, max_chars: int = 150000
+    ) -> str:
+        assert arxiv_id == "2609.00005"
+        return "Full article text for the test. " * 20
+
+    monkeypatch.setattr("hepfeed.generation.pipeline.fetch_full_text", fake_fetch)
+    Path("data").mkdir(exist_ok=True)
+    store = SeenStore("data/hepfeed.db")
+    _seed(store, "2609.00005")
+    store.close()
+
+    settings = Settings(_env_file=None, polza_api_key="test-key", llm_use_full_text=True)
+    result = generate_notes_sync(settings, limit=5)
+
+    assert result.generated == 1
+    assert "Full article text" in _FakeLLM.last_user
+    store = SeenStore("data/hepfeed.db")
+    try:
+        assert store.get_full_text("arxiv:2609.00005") is not None
+    finally:
+        store.close()

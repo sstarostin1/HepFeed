@@ -31,6 +31,8 @@ class Settings(BaseSettings):
         "deepseek/deepseek-v4-flash-0731@provider=deepinfra/fp8"
     )
     llm_reasoning_effort: str = "low"
+    llm_use_full_text: bool = True
+    llm_full_text_max_chars: int = 150_000
 
     # Telegram
     telegram_bot_token: str | None = None

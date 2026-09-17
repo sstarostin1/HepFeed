@@ -7,6 +7,7 @@ from datetime import timedelta
 
 import pytest
 
+from hepfeed.admin import PauseFlag
 from hepfeed.config import Settings
 from hepfeed.ingestion.pipeline import PollResult
 from hepfeed.scheduler import _parse_categories, build_scheduler, run_poll_job
@@ -20,7 +21,7 @@ def test_run_poll_job_handles_errors(
 
     monkeypatch.setattr("hepfeed.scheduler.poll_arxiv_sync", boom)
     with caplog.at_level(logging.ERROR):
-        run_poll_job(Settings(_env_file=None))
+        run_poll_job(Settings(_env_file=None), PauseFlag())
     assert "arXiv poll job failed" in caplog.text
 
 
@@ -30,7 +31,7 @@ def test_run_poll_job_logs_summary(
     result = PollResult(fetched=10, recent=3, unique=3, new=1)
     monkeypatch.setattr("hepfeed.scheduler.poll_arxiv_sync", lambda *a, **k: result)
     with caplog.at_level(logging.INFO):
-        run_poll_job(Settings(_env_file=None))
+        run_poll_job(Settings(_env_file=None), PauseFlag())
     assert "new=1" in caplog.text
 
 

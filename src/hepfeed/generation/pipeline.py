@@ -7,8 +7,10 @@ import logging
 from dataclasses import dataclass, field
 
 from hepfeed.config import Settings
+from hepfeed.enrichment.arxiv_html import fetch_full_text
 from hepfeed.generation.llm import LLMClient, LLMError
 from hepfeed.generation.notes import NoteValidationError, generate_note
+from hepfeed.ingestion.dedup import dedup_key
 from hepfeed.ingestion.models import PaperRecord
 from hepfeed.ingestion.store import (
     STATUS_NOTE_CREATED,
@@ -67,17 +69,37 @@ async def generate_notes_once(
                 extra_body=extra_body,
             ) as llm:
                 for record in pending:
-                    if not record.abstract.strip():
-                        # An empty input makes the task unsatisfiable and sends
-                        # reasoning models into a loop; leave the paper pending
-                        # so a future enrichment pass can fill the data in.
+                    full_text: str | None = None
+                    if settings.llm_use_full_text:
+                        key = dedup_key(record)
+                        full_text = store.get_full_text(key)
+                        if full_text is None:
+                            try:
+                                full_text = await fetch_full_text(
+                                    record.arxiv_id,
+                                    version=record.arxiv_version,
+                                    max_chars=settings.llm_full_text_max_chars,
+                                )
+                            except Exception:
+                                logger.warning(
+                                    "full-text fetch failed for %s",
+                                    record.arxiv_id,
+                                    exc_info=True,
+                                )
+                                full_text = None
+                            if full_text:
+                                store.set_full_text(record, full_text)
+                    if not record.abstract.strip() and not full_text:
+                        # Empty input makes the task unsatisfiable: reasoning
+                        # models loop on it. Leave the paper pending so a
+                        # future enrichment pass can fill the data in.
                         logger.warning(
-                            "skip %s: empty abstract, waiting for enrichment",
+                            "skip %s: no abstract and no full text, waiting for enrichment",
                             record.arxiv_id,
                         )
                         continue
                     try:
-                        note = await generate_note(record, llm)
+                        note = await generate_note(record, llm, full_text=full_text)
                     except (LLMError, NoteValidationError) as exc:
                         failed += 1
                         logger.warning("note generation failed for %s: %s", record.arxiv_id, exc)

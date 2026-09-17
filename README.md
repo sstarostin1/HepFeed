@@ -105,6 +105,19 @@ python -m hepfeed publish --approve 7           # одобрить заметк�
 python -m hepfeed publish --reject 7            # отклонить заметку ID 7
 ```
 
+Управление ботом — команды в личке у бота (только для `TELEGRAM_MODERATOR_CHAT_ID`):
+
+```text
+/status   — состояние конвейера (статьи, заметки, публикации)
+/pause    — пауза периодических задач
+/resume   — возобновить работу
+/run poll | notes | publish — ручной запуск этапа
+```
+
+Полный текст статьи подтягивается из HTML-рендеринга arXiv и кэшируется в БД
+(`LLM_USE_FULL_TEXT`, `LLM_FULL_TEXT_MAX_CHARS`) — заметки строятся по нему,
+а не по абстракту.
+
 Тесты и линтер:
 
 ```bash
@@ -121,7 +134,7 @@ docs/              концепция и спецификации (единст�
 src/hepfeed/       пакет конвейера
   ingestion/       сбор публикаций (arXiv сейчас; INSPIRE, CDS, RSS, институты — далее)
   filtering/       фильтрация и тегирование (отложено: уточняется семантика)
-  enrichment/      обогащение контекстом
+  enrichment/       обогащение: полный текст статей (HTML arXiv); INSPIRE/Crossref далее
   generation/      генерация заметок через LLM + пост-проверки формата
   publishing/      публикация в Telegram, модерация (MVP: без inline-кнопок)
   logging/         журнал обработки, аналитика и настройка логирования
