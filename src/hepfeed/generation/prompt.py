@@ -2,10 +2,19 @@
 
 The system prompt is the product text in Russian on purpose: notes are
 published in Russian and the language policy lives in AGENTS.md.
+
+The operator can replace the system prompt at runtime (admin command
+``/prompt_set``): the new text is stored in an override file next to the
+database (``data/system_prompt.txt``, not in git) and takes precedence over
+the built-in ``SYSTEM_PROMPT``. This survives redeploys, unlike editing the
+installed source file, and ``/prompt_reset`` restores the built-in text.
 """
 
 from __future__ import annotations
 
+from pathlib import Path
+
+from hepfeed.config import Settings
 from hepfeed.ingestion.models import PaperRecord
 
 SYSTEM_PROMPT = """\
@@ -42,6 +51,42 @@ m_H = 125.11 ± 0.11 GeV).
 текст статьи не предоставлен». Не рассуждай об этом и не привлекай внешние \
 знания о статье.
 """
+
+
+def system_prompt_path(settings: Settings) -> Path:
+    """Override file location: next to the SQLite database (``data/`` dir)."""
+    data = settings.ensure_data_dir()
+    base = data if data.is_dir() else data.parent
+    return base / "system_prompt.txt"
+
+
+def load_system_prompt(settings: Settings) -> tuple[str, bool]:
+    """Return (system prompt text, is_custom) for a generation cycle."""
+    path = system_prompt_path(settings)
+    if path.is_file():
+        try:
+            custom = path.read_text(encoding="utf-8").strip()
+        except OSError:
+            return SYSTEM_PROMPT, False
+        if custom:
+            return custom, True
+    return SYSTEM_PROMPT, False
+
+
+def save_system_prompt(settings: Settings, text: str) -> Path:
+    """Persist the operator-provided system prompt into the override file."""
+    path = system_prompt_path(settings)
+    path.write_text(text.strip() + "\n", encoding="utf-8")
+    return path
+
+
+def reset_system_prompt(settings: Settings) -> bool:
+    """Remove the override file; True when a custom prompt was removed."""
+    path = system_prompt_path(settings)
+    if path.is_file():
+        path.unlink()
+        return True
+    return False
 
 
 def build_user_prompt(record: PaperRecord, full_text: str | None = None) -> str:

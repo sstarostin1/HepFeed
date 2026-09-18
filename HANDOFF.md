@@ -30,7 +30,7 @@
 - GitHub: `github.com/sstarostin1/HepFeed`, публичный, ветка `main`,
   последний коммит `289febe` (всё запушено, дерево чистое).
 - Лицензия MIT (© Grestarideus). Линтер ruff, тесты pytest
-  (**105 passed**, все офлайн — MockTransport/фейки, реальный API не трогают).
+  (**116 passed**, все офлайн — MockTransport/фейки, реальный API не трогают).
 - Прекоммит-хуки активны: gitleaks + гигиена файлов.
 
 ### Сервер (деплой живой)
@@ -86,10 +86,11 @@
 - `scheduler.py` — APScheduler v3 (BlockingScheduler), 3 job'а с
   `PauseFlag` + поток `AdminListener`.
 - `admin.py` — консоль оператора: long-polling getUpdates, команды
-  `/status /pause /resume /run poll|notes|publish /help`, авторизация
-  только по модератор-чату; также обрабатывает `callback_query` от
+  `/status /pause /resume /run_poll /run_notes /run_publish /moderation on|off
+  /prompt /prompt_set /prompt_reset /help` (без пробелов — кликабельны),
+  авторизация только по модератор-чату; также обрабатывает `callback_query` от
   inline-кнопок модерации (`parse_moderation_callback`, `handle_callback`,
-  `moderation_keyboard`).
+  `moderation_keyboard`). Runtime-переключатели: `PauseFlag`, `ModerationFlag`.
 - `ingestion/` — `arxiv.py` (Atom API, ретраи 429/5xx/транспортных ошибок,
   окно свежести), `models.py` (PaperRecord, pydantic), `dedup.py`
   (ключи DOI → arXiv ID → title+author), `store.py` (SQLite: seen_papers +
@@ -111,6 +112,9 @@
 ### Служебное (локально, в `data/`, не в git)
 - `experiment_effort.py`, `exp_*.txt` — артефакты A/B-эксперимента reasoning;
 - `ft_test.py`, `seed_server.py` — серверные помощники для тестов;
+- `system_prompt.txt` — пользовательский системный промпт (задаётся командой
+  `/prompt_set`, перекрывает встроенный `SYSTEM_PROMPT`; `/prompt_reset`
+  возвращает встроенный; переживает деплои);
 - `.env` — реальные секреты (локально и на сервере; в git никогда).
 
 ---
@@ -137,6 +141,23 @@
 9. **Админ-консоль**: /status /pause /resume /run, пауза-флаг в job'ах.
 10. **Деплой на VPS**: клон, venv, systemd, гайд `docs/DEPLOY.md`.
 11. Документация: DEPLOY.md, SECURITY_NOTE.md, разделы README.
+
+---
+
+## 4а. Обновление 2026-09-18, сессия 2 (эта сессия)
+
+1. **Inline-кнопки модерации** (см. §6, п. 6) — сделано и задеплоено.
+2. **Модерация выключена, runtime-переключатель**: `ModerationFlag`
+   (стартовое значение — `PUBLISH_MODERATION`), команда `/moderation on|off`;
+   `publish_notes_sync(..., moderation=...)` перекрывает env-значение.
+3. **Команды без пробелов**: `/run_poll /run_notes /run_publish` вместо
+   `/run poll|notes|publish` — для кликабельности из справки.
+4. **Правка системного промпта из чата**: `/prompt` — промпт в копируемом
+   HTML-блоке `<pre>` (чанки по 3400 символов, html.escape), `/prompt_set` —
+   reply с новой версией (снимаются ```-фенсы, сохраняется в
+   `data/system_prompt.txt`, применяется со следующего цикла генерации),
+   `/prompt_reset` — сброс к встроенному. Файл промпта не редактируется
+   напрямую (затёрся бы `git pull`); оверрайд-файл — вне git.
 
 ---
 

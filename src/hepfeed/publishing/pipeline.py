@@ -57,8 +57,13 @@ async def publish_notes_once(
     dry_run: bool = False,
     approve: int | None = None,
     reject: int | None = None,
+    moderation: bool | None = None,
 ) -> PublishRunResult:
-    """Publish ready notes; or apply a moderator decision to a single note."""
+    """Publish ready notes; or apply a moderator decision to a single note.
+
+    ``moderation`` overrides ``PUBLISH_MODERATION`` for this run (the admin
+    console ``/moderation on|off`` switch); None keeps the configured value.
+    """
     if not settings.database_url.startswith("sqlite:///"):
         raise RuntimeError("SQLite storage is required for publishing for now")
     if not settings.telegram_bot_token:
@@ -75,7 +80,9 @@ async def publish_notes_once(
                 return await _apply_decision(
                     store, tg, settings, note_id=reject, approve=False, dry_run=dry_run
                 )
-            return await _publish_ready(store, tg, settings, limit=limit, dry_run=dry_run)
+            return await _publish_ready(
+                store, tg, settings, limit=limit, dry_run=dry_run, moderation=moderation
+            )
     finally:
         store.close()
 
@@ -98,12 +105,14 @@ async def _publish_ready(
     *,
     limit: int,
     dry_run: bool,
+    moderation: bool | None = None,
 ) -> PublishRunResult:
     published = 0
     sent_for_review = 0
     failed = 0
+    use_moderation = settings.publish_moderation if moderation is None else moderation
     for note in store.notes_ready(limit=limit):
-        if settings.publish_moderation:
+        if use_moderation:
             chat = settings.telegram_moderator_chat_id
             if not chat:
                 logger.warning(
@@ -189,10 +198,18 @@ def publish_notes_sync(
     dry_run: bool = False,
     approve: int | None = None,
     reject: int | None = None,
+    moderation: bool | None = None,
 ) -> PublishRunResult:
     """Synchronous wrapper around :func:`publish_notes_once` (for CLI and jobs)."""
     return asyncio.run(
-        publish_notes_once(settings, limit=limit, dry_run=dry_run, approve=approve, reject=reject)
+        publish_notes_once(
+            settings,
+            limit=limit,
+            dry_run=dry_run,
+            approve=approve,
+            reject=reject,
+            moderation=moderation,
+        )
     )
 
 

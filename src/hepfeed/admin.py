@@ -1,12 +1,16 @@
-"""Operator console over Telegram: status, pause/resume, manual runs.
+"""Operator console over Telegram: status, pause/resume, manual runs,
+moderation mode and runtime system-prompt editing.
 
 The listener is a long-polling daemon thread inside the scheduler process.
 Only the configured moderator chat is served; anything else is ignored
 (operator interaction per docs/CONCEPT.md, section 6.5 - not a reader bot).
+Commands use underscores instead of spaces so they stay clickable links in
+the Telegram client (help list, quick-command menus).
 """
 
 from __future__ import annotations
 
+import html
 import logging
 import threading
 
@@ -17,18 +21,32 @@ from hepfeed.config import Settings
 logger = logging.getLogger(__name__)
 
 _TELEGRAM_API_URL = "https://api.telegram.org"
+_HTML_PARSE_MODE = "HTML"
+"""Telegram parse mode for <pre> blocks (copy button above the block)."""
+_PROMPT_CHUNK_CHARS = 3400
+"""Raw characters per <pre> block, safely under the 4096 message limit."""
 
 _HELP_TEXT = (
     "Команды администратора HepFeed:\n"
     "/status - состояние конвейера\n"
     "/pause - приостановить периодические задачи\n"
     "/resume - возобновить работу\n"
-    "/run poll - опросить arXiv сейчас\n"
-    "/run notes - сгенерировать заметки сейчас\n"
-    "/run publish - опубликовать готовые заметки\n"
+    "/run_poll - опросить arXiv сейчас\n"
+    "/run_notes - сгенерировать заметки сейчас\n"
+    "/run_publish - опубликовать готовые заметки\n"
+    "/moderation on|off - ручное одобрение заметок перед публикацией\n"
+    "/prompt - показать системный промпт (копируется кнопкой над блоком)\n"
+    "/prompt_set - заменить промпт: ответьте (reply) этой командой на сообщение "
+    "с промптом, приложив его новую версию\n"
+    "/prompt_reset - вернуть встроенный системный промпт\n"
     "/help - эта справка\n\n"
     "Заметки на модерации приходят с кнопками «Опубликовать / Отклонить» - "
     "решение принимается прямо в чате."
+)
+
+_UNKNOWN_COMMAND_TEXT = (
+    "Неизвестная команда. Доступно: /status, /pause, /resume, /run_poll, "
+    "/run_notes, /run_publish, /moderation, /prompt, /prompt_set, /prompt_reset, /help"
 )
 
 
@@ -48,39 +66,148 @@ class PauseFlag:
         return self._event.is_set()
 
 
+class ModerationFlag:
+    """Thread-safe moderation switch shared by jobs and the admin listener.
+
+    Initial value comes from ``PUBLISH_MODERATION``; ``/moderation on|off``
+    changes it at runtime without touching the .env or restarting.
+    """
+
+    def __init__(self, enabled: bool = False) -> None:
+        self._event = threading.Event()
+        if enabled:
+            self._event.set()
+
+    def set(self, enabled: bool) -> None:
+        if enabled:
+            self._event.set()
+        else:
+            self._event.clear()
+
+    def is_set(self) -> bool:
+        return self._event.is_set()
+
+
 def handle_update(
-    update: dict[str, object], settings: Settings, flag: PauseFlag
-) -> tuple[str | None, str | None]:
-    """Process one Telegram update; return (reply_text, background_action)."""
+    update: dict[str, object],
+    settings: Settings,
+    flag: PauseFlag,
+    moderation: ModerationFlag | None = None,
+) -> tuple[list[tuple[str, str | None]], str | None]:
+    """Process one message update.
+
+    Return (messages, background_action); each message is (text, parse_mode).
+    """
     message = update.get("message") or {}
     if not isinstance(message, dict):
-        return None, None
+        return [], None
     chat = (message.get("chat") or {}).get("id")
     text = (message.get("text") or "").strip()
     if chat is None or not text:
-        return None, None
+        return [], None
     moderator = str(settings.telegram_moderator_chat_id or "")
     if not moderator or str(chat) != moderator:
         logger.warning("admin listener: ignored message from chat %s", chat)
-        return None, None
-    command = text.split()[0].split("@")[0].lower()
+        return [], None
+    parts = text.split()
+    command = parts[0].split("@")[0].lower()
+    arg = parts[1].lower() if len(parts) > 1 else ""
     if command == "/help":
-        return _HELP_TEXT, None
+        return [(_HELP_TEXT, None)], None
     if command == "/status":
-        return _status_reply(settings, flag), None
+        return [(_status_reply(settings, flag, moderation), None)], None
     if command == "/pause":
         flag.set()
-        return "Пауза: периодические задачи пропускаются до /resume", None
+        return [("Пауза: периодические задачи пропускаются до /resume", None)], None
     if command == "/resume":
         flag.clear()
-        return "Работа возобновлена", None
-    if command == "/run":
-        parts = text.split()
-        target = parts[1].lower() if len(parts) > 1 else ""
-        if target in ("poll", "notes", "publish"):
-            return f"Запущено в фоне: {target}", f"run_{target}"
-        return "Укажите задачу: /run poll | notes | publish", None
-    return "Неизвестная команда. Доступно: /status, /pause, /resume, /run, /help", None
+        return [("Работа возобновлена", None)], None
+    if command in ("/run_poll", "/run_notes", "/run_publish"):
+        target = command.removeprefix("/run_")
+        return [(f"Запущено в фоне: {target}", None)], f"run_{target}"
+    if command == "/moderation":
+        return _moderation_reply(settings, moderation, arg), None
+    if command == "/prompt":
+        return _prompt_messages(settings), None
+    if command == "/prompt_set":
+        return [_prompt_set_reply(message, settings)], None
+    if command == "/prompt_reset":
+        return [_prompt_reset_reply(settings)], None
+    return [(_UNKNOWN_COMMAND_TEXT, None)], None
+
+
+def _moderation_reply(
+    settings: Settings, moderation: ModerationFlag | None, arg: str
+) -> list[tuple[str, str | None]]:
+    current = moderation.is_set() if moderation is not None else settings.publish_moderation
+    if arg not in ("on", "off"):
+        state = "вкл" if current else "выкл"
+        return [
+            (
+                f"Модерация: {state}. Включить: /moderation on, выключить: /moderation off.",
+                None,
+            )
+        ]
+    if moderation is None:
+        return [("Runtime-переключение недоступно: moderation-флаг не передан.", None)]
+    moderation.set(arg == "on")
+    if arg == "on":
+        return [("Модерация включена: заметки уходят вам с кнопками решения.", None)]
+    return [("Модерация выключена: заметки публикуются в каналы сразу.", None)]
+
+
+def _prompt_messages(settings: Settings) -> list[tuple[str, str | None]]:
+    """Current system prompt as copyable <pre> blocks (chunked, HTML-escaped)."""
+    from hepfeed.generation.prompt import load_system_prompt  # lazy: import cycles
+
+    prompt, is_custom = load_system_prompt(settings)
+    source = "пользовательский (system_prompt.txt)" if is_custom else "встроенный"
+    header = f"Системный промпт ({source}, {len(prompt)} символов):"
+    chunks = [
+        prompt[i : i + _PROMPT_CHUNK_CHARS] for i in range(0, len(prompt), _PROMPT_CHUNK_CHARS)
+    ] or [prompt]
+    messages: list[tuple[str, str | None]] = []
+    for index, chunk in enumerate(chunks):
+        text = f"{header}\n<pre>{html.escape(chunk)}</pre>" if index == 0 else None
+        messages.append(
+            (text or f"(продолжение)\n<pre>{html.escape(chunk)}</pre>", _HTML_PARSE_MODE)
+        )
+    return messages
+
+
+def _prompt_set_reply(message: dict[str, object], settings: Settings) -> tuple[str, str | None]:
+    """Replace the system prompt with the text of the replied-to message."""
+    from hepfeed.generation.prompt import save_system_prompt  # lazy: import cycles
+
+    reply = message.get("reply_to_message") or {}
+    if not ((reply.get("from") or {}).get("is_bot")):
+        return (
+            "Отправьте /prompt_set как ответ (reply) на сообщение с промптом, "
+            "приложив его новую версию текстом.",
+            None,
+        )
+    new_text = str(reply.get("text") or "").strip()
+    if new_text.startswith("```"):  # unwrap optional code fences
+        new_text = new_text.split("\n", 1)[1] if "\n" in new_text else ""
+        if new_text.endswith("```"):
+            new_text = new_text[:-3]
+        new_text = new_text.strip()
+    if not new_text:
+        return ("В ответном сообщении нет текста промпта.", None)
+    save_system_prompt(settings, new_text)
+    return (
+        f"Системный промпт обновлён ({len(new_text)} символов); "
+        "применяется со следующего цикла генерации.",
+        None,
+    )
+
+
+def _prompt_reset_reply(settings: Settings) -> tuple[str, str | None]:
+    from hepfeed.generation.prompt import reset_system_prompt  # lazy: import cycles
+
+    if reset_system_prompt(settings):
+        return ("Пользовательский промпт удалён, снова действует встроенный.", None)
+    return ("Пользовательский промпт не был задан.", None)
 
 
 _MODERATION_APPROVE = "approve"
@@ -157,10 +284,15 @@ def _callback_message_ref(update: dict[str, object]) -> tuple[object, object] | 
     return chat_id, message_id
 
 
-def _status_reply(settings: Settings, flag: PauseFlag) -> str:
+def _status_reply(
+    settings: Settings, flag: PauseFlag, moderation: ModerationFlag | None = None
+) -> str:
     from hepfeed.ingestion.store import SeenStore  # lazy: avoids import cycles
 
     paused = "да" if flag.is_set() else "нет"
+    moderation_state = (
+        moderation.is_set() if moderation is not None else settings.publish_moderation
+    )
     try:
         stats = SeenStore(settings.ensure_data_dir()).stats()
     except Exception as exc:  # pragma: no cover - diagnostics only
@@ -168,6 +300,7 @@ def _status_reply(settings: Settings, flag: PauseFlag) -> str:
         return f"Пауза: {paused}; статистика недоступна ({exc})"
     return (
         f"Пауза: {paused}\n"
+        f"Модерация: {'вкл' if moderation_state else 'выкл'} (/moderation on|off)\n"
         f"Статей в БД: {stats['papers']} (ожидают заметку: {stats['papers_pending_note']})\n"
         f"Заметки: готово к публикации {stats['notes_ready']}, "
         f"на модерации {stats['notes_in_review']}, "
@@ -179,9 +312,12 @@ def _status_reply(settings: Settings, flag: PauseFlag) -> str:
 class AdminListener:
     """Long-polling Telegram thread that serves operator commands."""
 
-    def __init__(self, settings: Settings, flag: PauseFlag) -> None:
+    def __init__(
+        self, settings: Settings, flag: PauseFlag, moderation: ModerationFlag | None = None
+    ) -> None:
         self._settings = settings
         self._flag = flag
+        self._moderation = moderation or ModerationFlag(settings.publish_moderation)
         self._stop = threading.Event()
 
     def start(self) -> None:
@@ -217,10 +353,12 @@ class AdminListener:
         try:
             if update.get("callback_query") is not None:
                 callback_id, answer, action = handle_callback(update, self._settings)
-                reply = None
+                messages: list[tuple[str, str | None]] = []
             else:
                 callback_id = answer = None
-                reply, action = handle_update(update, self._settings, self._flag)
+                messages, action = handle_update(
+                    update, self._settings, self._flag, self._moderation
+                )
         except Exception:
             logger.exception("admin command processing failed")
             return
@@ -241,8 +379,8 @@ class AdminListener:
                 ).start()
         if callback_id and answer:
             self._answer_callback(client, callback_id, answer)
-        if reply:
-            self._send(client, reply)
+        for text, parse_mode in messages:
+            self._send(client, text, parse_mode)
 
     def _run_action(self, action: str) -> None:
         settings = self._settings
@@ -264,20 +402,24 @@ class AdminListener:
             elif action == "run_publish":
                 from hepfeed.publishing.pipeline import publish_notes_sync
 
-                publish_notes_sync(settings, limit=10)
+                publish_notes_sync(settings, limit=10, moderation=self._moderation.is_set())
         except Exception:
             logger.exception("admin action %s failed", action)
 
-    def _send(self, client: httpx.Client, text: str) -> None:
+    def _send(self, client: httpx.Client, text: str, parse_mode: str | None = None) -> None:
         token = self._settings.telegram_bot_token
         chat = self._settings.telegram_moderator_chat_id
         if not token or not chat:
             return
+        payload: dict[str, object] = {
+            "chat_id": chat,
+            "text": text,
+            "disable_web_page_preview": True,
+        }
+        if parse_mode:
+            payload["parse_mode"] = parse_mode
         try:
-            client.post(
-                f"{_TELEGRAM_API_URL}/bot{token}/sendMessage",
-                json={"chat_id": chat, "text": text, "disable_web_page_preview": True},
-            )
+            client.post(f"{_TELEGRAM_API_URL}/bot{token}/sendMessage", json=payload)
         except httpx.TransportError as exc:
             logger.warning("admin reply send failed: %s", exc)
 

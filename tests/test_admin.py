@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from hepfeed.admin import (
+    ModerationFlag,
     PauseFlag,
     handle_callback,
     handle_update,
@@ -34,9 +35,10 @@ def _update(text: str, chat: str = "12345") -> dict[str, object]:
 
 
 def test_help(env: Settings) -> None:
-    reply, action = handle_update(_update("/help"), env, PauseFlag())
-    assert reply is not None and "/status" in reply
+    messages, action = handle_update(_update("/help"), env, PauseFlag())
     assert action is None
+    assert "/run_poll" in messages[0][0]
+    assert "/prompt_set" in messages[0][0]
 
 
 def test_status_reports_counts(env: Settings) -> None:
@@ -47,35 +49,130 @@ def test_status_reports_counts(env: Settings) -> None:
     store.save_note(paper, "note", "m")
     store.close()
 
-    reply, action = handle_update(_update("/status"), env, PauseFlag())
-    assert reply is not None and "Статей в БД: 1" in reply
+    messages, action = handle_update(_update("/status"), env, PauseFlag())
     assert action is None
+    assert "Статей в БД: 1" in messages[0][0]
+    assert "Модерация: выкл" in messages[0][0]
 
 
 def test_pause_resume(env: Settings) -> None:
     flag = PauseFlag()
-    reply, action = handle_update(_update("/pause"), env, flag)
-    assert flag.is_set() and reply and action is None
+    messages, action = handle_update(_update("/pause"), env, flag)
+    assert flag.is_set() and messages and action is None
     handle_update(_update("/resume"), env, flag)
     assert not flag.is_set()
 
 
 def test_run_dispatch(env: Settings) -> None:
-    reply, action = handle_update(_update("/run notes"), env, PauseFlag())
-    assert action == "run_notes"
-    assert reply and "notes" in reply
-    reply, action = handle_update(_update("/run"), env, PauseFlag())
-    assert action is None and reply and "poll" in reply
+    for command, target in (
+        ("/run_poll", "poll"),
+        ("/run_notes", "notes"),
+        ("/run_publish", "publish"),
+    ):
+        messages, action = handle_update(_update(command), env, PauseFlag())
+        assert action == f"run_{target}"
+        assert messages and target in messages[0][0]
 
 
 def test_unknown_chat_ignored(env: Settings) -> None:
-    reply, action = handle_update(_update("/status", chat="999"), env, PauseFlag())
-    assert reply is None and action is None
+    messages, action = handle_update(_update("/status", chat="999"), env, PauseFlag())
+    assert not messages and action is None
 
 
 def test_unknown_command(env: Settings) -> None:
-    reply, _ = handle_update(_update("/whatever"), env, PauseFlag())
-    assert reply and "Неизвестная команда" in reply
+    messages, _ = handle_update(_update("/whatever"), env, PauseFlag())
+    assert messages and "Неизвестная команда" in messages[0][0]
+
+
+# --- Moderation mode switch ---
+
+
+def test_moderation_switch(env: Settings) -> None:
+    moderation = ModerationFlag(False)
+    messages, action = handle_update(_update("/moderation on"), env, PauseFlag(), moderation)
+    assert action is None and moderation.is_set()
+    assert "включена" in messages[0][0]
+
+    messages, _ = handle_update(_update("/moderation off"), env, PauseFlag(), moderation)
+    assert not moderation.is_set()
+    assert "выключена" in messages[0][0]
+
+    messages, _ = handle_update(_update("/moderation"), env, PauseFlag(), moderation)
+    assert "Модерация: выкл" in messages[0][0]
+
+
+def test_moderation_state_shown_in_status(env: Settings) -> None:
+    moderation = ModerationFlag(True)
+    messages, _ = handle_update(_update("/status"), env, PauseFlag(), moderation)
+    assert "Модерация: вкл" in messages[0][0]
+
+
+# --- System prompt viewing and replacement ---
+
+
+def test_prompt_shows_builtin_prompt(env: Settings) -> None:
+    messages, action = handle_update(_update("/prompt"), env, PauseFlag())
+    assert action is None
+    text, parse_mode = messages[0]
+    assert parse_mode == "HTML"
+    assert "встроенный" in text
+    assert "<pre>" in text and "</pre>" in text
+
+
+def test_prompt_set_via_reply(env: Settings) -> None:
+    from hepfeed.generation.prompt import load_system_prompt
+
+    update = _update("/prompt_set")
+    message = update["message"]
+    assert isinstance(message, dict)
+    message["reply_to_message"] = {"from": {"is_bot": True}, "text": "Новый промпт"}
+
+    messages, action = handle_update(update, env, PauseFlag())
+    assert action is None
+    assert "обновлён (12 символов)" in messages[0][0]
+
+    prompt, is_custom = load_system_prompt(env)
+    assert is_custom and prompt == "Новый промпт"
+
+
+def test_prompt_set_wraps_code_fences(env: Settings) -> None:
+    from hepfeed.generation.prompt import load_system_prompt
+
+    update = _update("/prompt_set")
+    message = update["message"]
+    assert isinstance(message, dict)
+    message["reply_to_message"] = {"from": {"is_bot": True}, "text": "```\nПромпт\n```"}
+
+    messages, _ = handle_update(update, env, PauseFlag())
+    assert "обновлён" in messages[0][0]
+
+    prompt, _ = load_system_prompt(env)
+    assert prompt == "Промпт"
+
+
+def test_prompt_set_requires_reply(env: Settings) -> None:
+    messages, _ = handle_update(_update("/prompt_set"), env, PauseFlag())
+    assert "reply" in messages[0][0]
+
+
+def test_prompt_set_reply_to_human_ignored(env: Settings) -> None:
+    update = _update("/prompt_set")
+    message = update["message"]
+    assert isinstance(message, dict)
+    message["reply_to_message"] = {"from": {"is_bot": False}, "text": "подделка"}
+
+    messages, _ = handle_update(update, env, PauseFlag())
+    assert "reply" in messages[0][0]
+
+
+def test_prompt_reset(env: Settings) -> None:
+    from hepfeed.generation.prompt import save_system_prompt
+
+    save_system_prompt(env, "временный")
+    messages, _ = handle_update(_update("/prompt_reset"), env, PauseFlag())
+    assert "удалён" in messages[0][0]
+    messages, _ = handle_update(_update("/prompt_reset"), env, PauseFlag())
+    assert "не был задан" in messages[0][0]
 
 
 # --- Inline moderation buttons (callback_query) ---
