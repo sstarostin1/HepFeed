@@ -34,11 +34,11 @@ _HELP_TEXT = (
     "/run_poll - опросить arXiv сейчас\n"
     "/run_notes - сгенерировать заметки сейчас\n"
     "/run_publish - опубликовать готовые заметки\n"
-    "/moderation on|off - ручное одобрение заметок перед публикацией\n"
-    "/prompt - показать системный промпт (копируется кнопкой над блоком)\n"
+    "/moderation - переключить ручное одобрение заметок (вкл/выкл)\n"
+    "/prompt - показать системный промпт (копируемый блок, кнопки отката и подсказки)\n"
     "/prompt_set - заменить промпт: ответьте (reply) этой командой на сообщение "
     "с промптом, приложив его новую версию\n"
-    "/prompt_reset - вернуть встроенный системный промпт\n"
+    "/prompt_reset - откатить промпт к предыдущей версии\n"
     "/help - эта справка\n\n"
     "Заметки на модерации приходят с кнопками «Опубликовать / Отклонить» - "
     "решение принимается прямо в чате."
@@ -93,10 +93,11 @@ def handle_update(
     settings: Settings,
     flag: PauseFlag,
     moderation: ModerationFlag | None = None,
-) -> tuple[list[tuple[str, str | None]], str | None]:
+) -> tuple[list[tuple[str, str | None, dict[str, object] | None]], str | None]:
     """Process one message update.
 
-    Return (messages, background_action); each message is (text, parse_mode).
+    Return (messages, background_action); each message is
+    (text, parse_mode, reply_markup).
     """
     message = update.get("message") or {}
     if not isinstance(message, dict):
@@ -111,52 +112,59 @@ def handle_update(
         return [], None
     parts = text.split()
     command = parts[0].split("@")[0].lower()
-    arg = parts[1].lower() if len(parts) > 1 else ""
     if command == "/help":
-        return [(_HELP_TEXT, None)], None
+        return [(_HELP_TEXT, None, None)], None
     if command == "/status":
-        return [(_status_reply(settings, flag, moderation), None)], None
+        return [(_status_reply(settings, flag, moderation), None, None)], None
     if command == "/pause":
         flag.set()
-        return [("Пауза: периодические задачи пропускаются до /resume", None)], None
+        return [("Пауза: периодические задачи пропускаются до /resume", None, None)], None
     if command == "/resume":
         flag.clear()
-        return [("Работа возобновлена", None)], None
+        return [("Работа возобновлена", None, None)], None
     if command in ("/run_poll", "/run_notes", "/run_publish"):
         target = command.removeprefix("/run_")
-        return [(f"Запущено в фоне: {target}", None)], f"run_{target}"
+        return [(f"Запущено в фоне: {target}", None, None)], f"run_{target}"
     if command == "/moderation":
-        return _moderation_reply(settings, moderation, arg), None
+        return _moderation_reply(settings, moderation), None
     if command == "/prompt":
         return _prompt_messages(settings), None
     if command == "/prompt_set":
         return [_prompt_set_reply(message, settings)], None
     if command == "/prompt_reset":
         return [_prompt_reset_reply(settings)], None
-    return [(_UNKNOWN_COMMAND_TEXT, None)], None
+    return [(_UNKNOWN_COMMAND_TEXT, None, None)], None
 
 
 def _moderation_reply(
-    settings: Settings, moderation: ModerationFlag | None, arg: str
-) -> list[tuple[str, str | None]]:
-    current = moderation.is_set() if moderation is not None else settings.publish_moderation
-    if arg not in ("on", "off"):
-        state = "вкл" if current else "выкл"
-        return [
-            (
-                f"Модерация: {state}. Включить: /moderation on, выключить: /moderation off.",
-                None,
-            )
-        ]
+    settings: Settings, moderation: ModerationFlag | None
+) -> list[tuple[str, str | None, dict[str, object] | None]]:
     if moderation is None:
-        return [("Runtime-переключение недоступно: moderation-флаг не передан.", None)]
-    moderation.set(arg == "on")
-    if arg == "on":
-        return [("Модерация включена: заметки уходят вам с кнопками решения.", None)]
-    return [("Модерация выключена: заметки публикуются в каналы сразу.", None)]
+        current = settings.publish_moderation
+        state = "вкл" if current else "выкл"
+        return [(f"Модерация: {state} (runtime-переключение недоступно).", None, None)]
+    if moderation.is_set():
+        moderation.set(False)
+        return [("Модерация выключена: заметки публикуются в каналы сразу.", None, None)]
+    moderation.set(True)
+    return [("Модерация включена: заметки уходят вам с кнопками решения.", None, None)]
 
 
-def _prompt_messages(settings: Settings) -> list[tuple[str, str | None]]:
+def prompt_keyboard() -> dict[str, object]:
+    """Inline keyboard under the /prompt output (rollback and edit hint)."""
+    return {
+        "inline_keyboard": [
+            [
+                {"text": "Откатить к предыдущей", "callback_data": "prompt:rollback"},
+                {"text": "Как редактировать", "callback_data": "prompt:edit_hint"},
+            ]
+        ]
+    }
+
+
+def _prompt_messages(
+    settings: Settings,
+) -> list[tuple[str, str | None, dict[str, object] | None]]:
     """Current system prompt as copyable <pre> blocks (chunked, HTML-escaped)."""
     from hepfeed.generation.prompt import load_system_prompt  # lazy: import cycles
 
@@ -166,16 +174,17 @@ def _prompt_messages(settings: Settings) -> list[tuple[str, str | None]]:
     chunks = [
         prompt[i : i + _PROMPT_CHUNK_CHARS] for i in range(0, len(prompt), _PROMPT_CHUNK_CHARS)
     ] or [prompt]
-    messages: list[tuple[str, str | None]] = []
+    messages: list[tuple[str, str | None, dict[str, object] | None]] = []
     for index, chunk in enumerate(chunks):
-        text = f"{header}\n<pre>{html.escape(chunk)}</pre>" if index == 0 else None
-        messages.append(
-            (text or f"(продолжение)\n<pre>{html.escape(chunk)}</pre>", _HTML_PARSE_MODE)
-        )
+        prefix = header if index == 0 else "(продолжение)"
+        markup = prompt_keyboard() if index == len(chunks) - 1 else None
+        messages.append((f"{prefix}\n<pre>{html.escape(chunk)}</pre>", _HTML_PARSE_MODE, markup))
     return messages
 
 
-def _prompt_set_reply(message: dict[str, object], settings: Settings) -> tuple[str, str | None]:
+def _prompt_set_reply(
+    message: dict[str, object], settings: Settings
+) -> tuple[str, str | None, dict[str, object] | None]:
     """Replace the system prompt with the text of the replied-to message."""
     from hepfeed.generation.prompt import save_system_prompt  # lazy: import cycles
 
@@ -185,6 +194,7 @@ def _prompt_set_reply(message: dict[str, object], settings: Settings) -> tuple[s
             "Отправьте /prompt_set как ответ (reply) на сообщение с промптом, "
             "приложив его новую версию текстом.",
             None,
+            None,
         )
     new_text = str(reply.get("text") or "").strip()
     if new_text.startswith("```"):  # unwrap optional code fences
@@ -193,21 +203,26 @@ def _prompt_set_reply(message: dict[str, object], settings: Settings) -> tuple[s
             new_text = new_text[:-3]
         new_text = new_text.strip()
     if not new_text:
-        return ("В ответном сообщении нет текста промпта.", None)
+        return ("В ответном сообщении нет текста промпта.", None, None)
     save_system_prompt(settings, new_text)
     return (
-        f"Системный промпт обновлён ({len(new_text)} символов); "
-        "применяется со следующего цикла генерации.",
+        f"Системный промпт обновлён ({len(new_text)} символов); предыдущая версия "
+        "сохранена и применяется со следующего цикла генерации. "
+        "Откат: /prompt_reset или кнопка под /prompt.",
+        None,
         None,
     )
 
 
-def _prompt_reset_reply(settings: Settings) -> tuple[str, str | None]:
-    from hepfeed.generation.prompt import reset_system_prompt  # lazy: import cycles
+def _prompt_reset_reply(
+    settings: Settings,
+) -> tuple[str, str | None, dict[str, object] | None]:
+    from hepfeed.generation.prompt import rollback_system_prompt  # lazy: import cycles
 
-    if reset_system_prompt(settings):
-        return ("Пользовательский промпт удалён, снова действует встроенный.", None)
-    return ("Пользовательский промпт не был задан.", None)
+    restored = rollback_system_prompt(settings)
+    if restored is None:
+        return ("Предыдущая версия промпта отсутствует - откатывать не к чему.", None, None)
+    return (f"Промпт откачен к предыдущей версии ({len(restored)} символов).", None, None)
 
 
 _MODERATION_APPROVE = "approve"
@@ -251,6 +266,16 @@ def parse_moderation_callback(data: object) -> tuple[bool, int] | None:
     return None
 
 
+_PROMPT_ACTIONS = {"prompt:rollback": "prompt_rollback", "prompt:edit_hint": "prompt_edit_hint"}
+
+
+def parse_prompt_callback(data: object) -> str | None:
+    """Map ``prompt:*`` callback data to a background action; None otherwise."""
+    if not isinstance(data, str):
+        return None
+    return _PROMPT_ACTIONS.get(data)
+
+
 def handle_callback(
     update: dict[str, object], settings: Settings
 ) -> tuple[str | None, str | None, str | None]:
@@ -265,12 +290,20 @@ def handle_callback(
         logger.warning("admin listener: callback from unauthorized user %s", sender)
         return callback_id, "Недостаточно прав", None
     parsed = parse_moderation_callback(callback.get("data"))
-    if parsed is None:
-        return callback_id, "Неизвестное действие кнопки", None
-    approve, note_id = parsed
-    action = f"moderate:{_MODERATION_APPROVE if approve else _MODERATION_REJECT}:{note_id}"
-    answer = f"Публикую заметку {note_id}..." if approve else f"Отклоняю заметку {note_id}..."
-    return callback_id, answer, action
+    if parsed is not None:
+        approve, note_id = parsed
+        action = f"moderate:{_MODERATION_APPROVE if approve else _MODERATION_REJECT}:{note_id}"
+        answer = f"Публикую заметку {note_id}..." if approve else f"Отклоняю заметку {note_id}..."
+        return callback_id, answer, action
+    prompt_action = parse_prompt_callback(callback.get("data"))
+    if prompt_action is not None:
+        answer = (
+            "Откатываю промпт к предыдущей версии..."
+            if prompt_action == "prompt_rollback"
+            else "Показываю, как редактировать промпт..."
+        )
+        return callback_id, answer, prompt_action
+    return callback_id, "Неизвестное действие кнопки", None
 
 
 def _callback_message_ref(update: dict[str, object]) -> tuple[object, object] | None:
@@ -370,6 +403,13 @@ class AdminListener:
                     name=f"admin-{action}",
                     daemon=True,
                 ).start()
+            elif action.startswith("prompt_"):
+                threading.Thread(
+                    target=self._run_prompt_action,
+                    args=(action, _callback_message_ref(update)),
+                    name=f"admin-{action}",
+                    daemon=True,
+                ).start()
             else:
                 threading.Thread(
                     target=self._run_action,
@@ -379,8 +419,8 @@ class AdminListener:
                 ).start()
         if callback_id and answer:
             self._answer_callback(client, callback_id, answer)
-        for text, parse_mode in messages:
-            self._send(client, text, parse_mode)
+        for text, parse_mode, markup in messages:
+            self._send(client, text, parse_mode, markup)
 
     def _run_action(self, action: str) -> None:
         settings = self._settings
@@ -406,7 +446,13 @@ class AdminListener:
         except Exception:
             logger.exception("admin action %s failed", action)
 
-    def _send(self, client: httpx.Client, text: str, parse_mode: str | None = None) -> None:
+    def _send(
+        self,
+        client: httpx.Client,
+        text: str,
+        parse_mode: str | None = None,
+        reply_markup: dict[str, object] | None = None,
+    ) -> None:
         token = self._settings.telegram_bot_token
         chat = self._settings.telegram_moderator_chat_id
         if not token or not chat:
@@ -418,6 +464,8 @@ class AdminListener:
         }
         if parse_mode:
             payload["parse_mode"] = parse_mode
+        if reply_markup is not None:
+            payload["reply_markup"] = reply_markup
         try:
             client.post(f"{_TELEGRAM_API_URL}/bot{token}/sendMessage", json=payload)
         except httpx.TransportError as exc:
@@ -464,6 +512,39 @@ class AdminListener:
             if applied and message_ref is not None:
                 self._clear_reply_markup(client, message_ref[0], message_ref[1])
             self._send(client, status_line)
+
+    def _run_prompt_action(self, action: str, message_ref: tuple[object, object] | None) -> None:
+        """Handle /prompt keyboard buttons: rollback or editing hint."""
+        with httpx.Client(timeout=30.0) as client:
+            if action == "prompt_rollback":
+                from hepfeed.generation.prompt import rollback_system_prompt
+
+                restored = rollback_system_prompt(self._settings)
+                if restored is None:
+                    self._send(client, "Предыдущая версия промпта отсутствует.")
+                    return
+                self._clear_reply_markup(client, *(message_ref or (None, None)))
+                self._send(
+                    client,
+                    f"Промпт откачен к предыдущей версии ({len(restored)} символов).",
+                )
+            elif action == "prompt_edit_hint":
+                from hepfeed.generation.prompt import SYSTEM_PROMPT
+
+                self._send(
+                    client,
+                    "Как редактировать промпт:\n"
+                    "1. /prompt - текущий текст в копируемом блоке.\n"
+                    "2. Скопируйте, поправьте, отправьте исправленный текст в чат.\n"
+                    "3. Ответьте (reply) на своё сообщение командой /prompt_set - "
+                    "версия сохранится, предыдущая останется в бэкапе.\n"
+                    "Откат к предыдущей: /prompt_reset или кнопка под /prompt.",
+                )
+                self._send(
+                    client,
+                    f"Встроенный вариант (для справки):\n<pre>{html.escape(SYSTEM_PROMPT)}</pre>",
+                    _HTML_PARSE_MODE,
+                )
 
     def _apply_moderation_decision(self, action: str) -> tuple[str, bool]:
         """Run the decision in the store and publishing pipeline; return (status_line, applied)."""
