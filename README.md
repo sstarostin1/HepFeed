@@ -150,6 +150,7 @@ tests/             pytest
 | [docs/CONCEPT.md](docs/CONCEPT.md) | концепция, формат заметки, архитектура, риски, дорожная карта |
 | [docs/SOURCES.md](docs/SOURCES.md) | спецификация всех источников: API, лимиты, матрица покрытия |
 | [docs/SECURITY_NOTE.md](docs/SECURITY_NOTE.md) | политика секретов и юридические оговорки |
+| [docs/DEPLOY.md](docs/DEPLOY.md) | ручной пуш в репозиторий и деплой на сервер |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | процесс разработки: ветки, коммиты, PR |
 
 ## Дисклеймер
