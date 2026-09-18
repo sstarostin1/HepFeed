@@ -57,8 +57,9 @@ class TelegramClient:
         chat_id: str,
         text: str,
         reply_markup: dict[str, object] | None = None,
+        parse_mode: str | None = None,
     ) -> int:
-        """Send a plain-text message and return the created message id."""
+        """Send a message and return the created message id."""
         payload: dict[str, object] = {
             "chat_id": chat_id,
             "text": text,
@@ -66,6 +67,8 @@ class TelegramClient:
         }
         if reply_markup is not None:
             payload["reply_markup"] = reply_markup
+        if parse_mode:
+            payload["parse_mode"] = parse_mode
         data = await self._post_with_retries(f"/bot{self._api_token}/sendMessage", payload)
         return int(data["result"]["message_id"])
 

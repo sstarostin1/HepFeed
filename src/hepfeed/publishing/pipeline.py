@@ -21,6 +21,7 @@ from hepfeed.ingestion.store import (
     ReadyNote,
     SeenStore,
 )
+from hepfeed.publishing.markdown import to_telegram_html
 from hepfeed.publishing.telegram import TelegramClient, TelegramError
 
 if TYPE_CHECKING:
@@ -126,9 +127,14 @@ async def _publish_ready(
                 logger.info("[dry-run] would send note %d to moderator chat", note.note_id)
                 sent_for_review += 1
                 continue
-            text = f"ID: {note.note_id} — на модерацию\n\n{note.note_text}"
+            text = f"ID: {note.note_id} — на модерацию\n\n{to_telegram_html(note.note_text)}"
             try:
-                await tg.send_message(chat, text, reply_markup=moderation_keyboard(note.note_id))
+                await tg.send_message(
+                    chat,
+                    text,
+                    reply_markup=moderation_keyboard(note.note_id),
+                    parse_mode="HTML",
+                )
             except TelegramError as exc:
                 failed += 1
                 logger.warning("moderator send failed for note %d: %s", note.note_id, exc)
@@ -146,7 +152,9 @@ async def _publish_ready(
             published += 1
             continue
         try:
-            message_id = await tg.send_message(channel, note.note_text)
+            message_id = await tg.send_message(
+                channel, to_telegram_html(note.note_text), parse_mode="HTML"
+            )
         except TelegramError as exc:
             failed += 1
             logger.warning("publish failed for note %d: %s", note.note_id, exc)
@@ -182,7 +190,9 @@ async def _apply_decision(
         logger.info("[dry-run] would publish note %d to %s", note_id, channel)
         return PublishRunResult(published=1)
     try:
-        message_id = await tg.send_message(channel, note.note_text)
+        message_id = await tg.send_message(
+            channel, to_telegram_html(note.note_text), parse_mode="HTML"
+        )
     except TelegramError as exc:
         logger.warning("publish failed for note %d: %s", note_id, exc)
         return PublishRunResult(failed=1)

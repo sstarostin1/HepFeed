@@ -89,16 +89,19 @@ def test_unknown_command(env: Settings) -> None:
 
 def test_moderation_switch(env: Settings) -> None:
     moderation = ModerationFlag(False)
-    messages, action = handle_update(_update("/moderation on"), env, PauseFlag(), moderation)
+    # /moderation is a pure toggle: no arguments needed (clickable in help)
+    messages, action = handle_update(_update("/moderation"), env, PauseFlag(), moderation)
     assert action is None and moderation.is_set()
     assert "включена" in messages[0][0]
 
-    messages, _ = handle_update(_update("/moderation off"), env, PauseFlag(), moderation)
+    messages, _ = handle_update(_update("/moderation"), env, PauseFlag(), moderation)
     assert not moderation.is_set()
     assert "выключена" in messages[0][0]
 
-    messages, _ = handle_update(_update("/moderation"), env, PauseFlag(), moderation)
-    assert "Модерация: выкл" in messages[0][0]
+    # a trailing argument is ignored safely
+    messages, _ = handle_update(_update("/moderation on"), env, PauseFlag(), moderation)
+    assert moderation.is_set()
+    assert "включена" in messages[0][0]
 
 
 def test_moderation_state_shown_in_status(env: Settings) -> None:
@@ -113,10 +116,11 @@ def test_moderation_state_shown_in_status(env: Settings) -> None:
 def test_prompt_shows_builtin_prompt(env: Settings) -> None:
     messages, action = handle_update(_update("/prompt"), env, PauseFlag())
     assert action is None
-    text, parse_mode = messages[0]
+    text, parse_mode, markup = messages[0]
     assert parse_mode == "HTML"
     assert "встроенный" in text
     assert "<pre>" in text and "</pre>" in text
+    assert markup is not None and "prompt:rollback" in str(markup)
 
 
 def test_prompt_set_via_reply(env: Settings) -> None:
@@ -168,11 +172,33 @@ def test_prompt_set_reply_to_human_ignored(env: Settings) -> None:
 def test_prompt_reset(env: Settings) -> None:
     from hepfeed.generation.prompt import save_system_prompt
 
+    # first save has no previous custom version to roll back to
+    # (the built-in prompt is deliberately forgotten, per operator request)
     save_system_prompt(env, "временный")
     messages, _ = handle_update(_update("/prompt_reset"), env, PauseFlag())
-    assert "удалён" in messages[0][0]
+    assert "отсутствует" in messages[0][0]
+
+    save_system_prompt(env, "вторая версия")
     messages, _ = handle_update(_update("/prompt_reset"), env, PauseFlag())
-    assert "не был задан" in messages[0][0]
+    assert "откачен" in messages[0][0]
+
+
+def test_prompt_rollback_keeps_builtin_as_version_zero(env: Settings) -> None:
+    from hepfeed.generation.prompt import load_system_prompt, save_system_prompt
+
+    save_system_prompt(env, "версия 2")
+    save_system_prompt(env, "версия 3")
+    messages, _ = handle_update(_update("/prompt_reset"), env, PauseFlag())
+    assert "откачен" in messages[0][0]
+
+    prompt, is_custom = load_system_prompt(env)
+    assert is_custom and prompt == "версия 2"
+
+    # backup is consumed: nothing older exists, the prompt stays at version 2
+    messages, _ = handle_update(_update("/prompt_reset"), env, PauseFlag())
+    assert "отсутствует" in messages[0][0]
+    prompt, is_custom = load_system_prompt(env)
+    assert is_custom and prompt == "версия 2"
 
 
 # --- Inline moderation buttons (callback_query) ---
@@ -227,3 +253,24 @@ def test_callback_from_stranger_denied(env: Settings) -> None:
 def test_callback_malformed_data(env: Settings) -> None:
     _, _, action = handle_callback(_callback_update("bogus"), env)
     assert action is None
+
+
+# --- /prompt inline keyboard ---
+
+
+def test_prompt_keyboard_structure() -> None:
+    from hepfeed.admin import prompt_keyboard
+
+    keyboard = prompt_keyboard()
+    buttons = keyboard["inline_keyboard"][0]
+    assert [button["callback_data"] for button in buttons] == [
+        "prompt:rollback",
+        "prompt:edit_hint",
+    ]
+
+
+def test_prompt_callback_actions(env: Settings) -> None:
+    _, _, rollback = handle_callback(_callback_update("prompt:rollback"), env)
+    _, _, hint = handle_callback(_callback_update("prompt:edit_hint"), env)
+    assert rollback == "prompt_rollback"
+    assert hint == "prompt_edit_hint"

@@ -50,6 +50,10 @@ m_H = 125.11 ± 0.11 GeV).
 (заголовок, идентификаторы, теги) и одну строку «Контекст не восстановлен: \
 текст статьи не предоставлен». Не рассуждай об этом и не привлекай внешние \
 знания о статье.
+9. Разметка допускается только такая: **жирный**, *курсив*, `код`, \
+[текст](ссылка) и цитата - блок, который читатель может развернуть (например, \
+блок «Ограничения»), оформляй строками, начинающимися с «> ». Никакой другой \
+разметки и табличного синтаксиса.
 """
 
 
@@ -73,20 +77,42 @@ def load_system_prompt(settings: Settings) -> tuple[str, bool]:
     return SYSTEM_PROMPT, False
 
 
+def prompt_history_path(settings: Settings) -> Path:
+    """Backup of the previous prompt version (n-1), next to the current one."""
+    base = settings.ensure_data_dir()
+    base = base if base.is_dir() else base.parent
+    return base / "system_prompt.prev.txt"
+
+
 def save_system_prompt(settings: Settings, text: str) -> Path:
-    """Persist the operator-provided system prompt into the override file."""
+    """Persist the new prompt; the current version is backed up as n-1."""
     path = system_prompt_path(settings)
+    history = prompt_history_path(settings)
+    if path.is_file():
+        history.write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
     path.write_text(text.strip() + "\n", encoding="utf-8")
     return path
 
 
-def reset_system_prompt(settings: Settings) -> bool:
-    """Remove the override file; True when a custom prompt was removed."""
+def rollback_system_prompt(settings: Settings) -> str | None:
+    """Restore the previous prompt version; return its text or None if absent.
+
+    The built-in prompt is never restored automatically: it is just the
+    initial version and the operator can paste it back manually if needed.
+    """
     path = system_prompt_path(settings)
-    if path.is_file():
-        path.unlink()
-        return True
-    return False
+    history = prompt_history_path(settings)
+    if not history.is_file():
+        return None
+    restored = history.read_text(encoding="utf-8").strip()
+    if restored:
+        path.write_text(restored + "\n", encoding="utf-8")
+    else:
+        # empty backup means the previous state was "no custom prompt":
+        # dropping the current file brings the built-in prompt back
+        path.unlink(missing_ok=True)
+    history.unlink()
+    return restored or None
 
 
 def build_user_prompt(record: PaperRecord, full_text: str | None = None) -> str:

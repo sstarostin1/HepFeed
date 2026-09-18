@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import html
 import sqlite3
 from pathlib import Path
 from typing import ClassVar
@@ -11,6 +12,7 @@ import pytest
 from hepfeed.config import Settings
 from hepfeed.ingestion.models import PaperRecord
 from hepfeed.ingestion.store import SeenStore
+from hepfeed.publishing.markdown import to_telegram_html
 from hepfeed.publishing.pipeline import (
     apply_moderation_decision_sync,
     publish_notes_sync,
@@ -41,7 +43,7 @@ def _paper(arxiv_id: str, acc: bool = False) -> PaperRecord:
 
 
 class FakeTelegram:
-    sent: ClassVar[list[tuple[str, str, dict[str, object] | None]]] = []
+    sent: ClassVar[list[tuple[str, str, dict[str, object] | None, str | None]]] = []
 
     def __init__(self, api_token: str, **kwargs: object) -> None:
         assert api_token, "bot token must be passed through"
@@ -53,9 +55,13 @@ class FakeTelegram:
         return None
 
     async def send_message(
-        self, chat_id: str, text: str, reply_markup: dict[str, object] | None = None
+        self,
+        chat_id: str,
+        text: str,
+        reply_markup: dict[str, object] | None = None,
+        parse_mode: str | None = None,
     ) -> int:
-        FakeTelegram.sent.append((chat_id, text, reply_markup))
+        FakeTelegram.sent.append((chat_id, text, reply_markup, parse_mode))
         return len(FakeTelegram.sent)
 
 
@@ -175,6 +181,47 @@ def test_publish_dry_run(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Non
     assert result.published == 1
     assert FakeTelegram.sent == []
     assert _note_status(1) == "ready"
+
+
+def test_publish_converts_markdown_to_html(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("hepfeed.publishing.pipeline.TelegramClient", FakeTelegram)
+    _seed_note("2609.00108")
+    note_text = (
+        "Заголовок\n\n**Ключевой результат** и *курсив*.\n"
+        "> Ограничения: статистика ограничена.\n> Данные одного эксперимента.\n\n"
+        "Ссылка: https://arxiv.org/abs/2609.00108"
+    )
+    conn = sqlite3.connect("data/hepfeed.db")
+    try:
+        conn.execute("UPDATE notes SET note_text = ? WHERE id = 1", (note_text,))
+        conn.commit()
+    finally:
+        conn.close()
+
+    publish_notes_sync(_settings(), limit=5)
+
+    text, parse_mode = FakeTelegram.sent[0][1], FakeTelegram.sent[0][3]
+    assert parse_mode == "HTML"
+    assert "<b>Ключевой результат</b>" in text
+    assert "<i>курсив</i>" in text
+    assert "<blockquote expandable>" in text and "</blockquote>" in text
+    assert '<a href="https://arxiv.org/abs/2609.00108">' in text
+    assert "**" not in text and "&gt; " not in text
+
+
+def test_to_telegram_html_escapes_unsafe_markup() -> None:
+    text = "a <b> raw & **bold** <script>alert(1)</script> `x`"
+    converted = to_telegram_html(text)
+    assert "<b>bold</b>" in converted
+    assert "&lt;b&gt;" in converted
+    assert "&lt;script&gt;" in converted
+    assert "<code>x</code>" in converted
+
+
+def test_to_telegram_html_keeps_plain_text_without_markup() -> None:
+    text = "Просто текст, без разметки.\nВторая строка."
+    assert to_telegram_html(text) == html.escape(text, quote=False)
 
 
 def test_publish_requires_token(tmp_path: Path) -> None:
