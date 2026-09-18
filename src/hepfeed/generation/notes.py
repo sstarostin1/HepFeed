@@ -23,9 +23,17 @@ class NoteValidationError(ValueError):
     """Raised when a generated note violates hard format requirements."""
 
 
-def build_note_messages(record: PaperRecord, full_text: str | None = None) -> tuple[str, str]:
-    """Return the (system, user) prompt pair for a paper."""
-    return SYSTEM_PROMPT, build_user_prompt(record, full_text=full_text)
+def build_note_messages(
+    record: PaperRecord,
+    full_text: str | None = None,
+    system_prompt: str | None = None,
+) -> tuple[str, str]:
+    """Return the (system, user) prompt pair for a paper.
+
+    ``system_prompt`` overrides the built-in ``SYSTEM_PROMPT`` (operator's
+    runtime custom prompt); None keeps the built-in text.
+    """
+    return system_prompt or SYSTEM_PROMPT, build_user_prompt(record, full_text=full_text)
 
 
 def validate_note(note: str, record: PaperRecord) -> list[str]:
@@ -43,9 +51,14 @@ def validate_note(note: str, record: PaperRecord) -> list[str]:
     return issues
 
 
-async def generate_note(record: PaperRecord, llm: LLMClient, full_text: str | None = None) -> str:
+async def generate_note(
+    record: PaperRecord,
+    llm: LLMClient,
+    full_text: str | None = None,
+    system_prompt: str | None = None,
+) -> str:
     """Generate a note for the paper and enforce the hard format checks."""
-    system, user = build_note_messages(record, full_text=full_text)
+    system, user = build_note_messages(record, full_text=full_text, system_prompt=system_prompt)
     # generous budget: reasoning models spend tokens before the final answer
     note = await llm.complete(system, user, max_tokens=10000, temperature=0.3)
     issues = validate_note(note, record)
@@ -54,6 +67,11 @@ async def generate_note(record: PaperRecord, llm: LLMClient, full_text: str | No
     return note
 
 
-def generate_note_sync(record: PaperRecord, llm: LLMClient, full_text: str | None = None) -> str:
+def generate_note_sync(
+    record: PaperRecord,
+    llm: LLMClient,
+    full_text: str | None = None,
+    system_prompt: str | None = None,
+) -> str:
     """Synchronous wrapper around :func:`generate_note`."""
-    return asyncio.run(generate_note(record, llm, full_text=full_text))
+    return asyncio.run(generate_note(record, llm, full_text=full_text, system_prompt=system_prompt))

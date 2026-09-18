@@ -10,6 +10,7 @@ from hepfeed.config import Settings
 from hepfeed.enrichment.arxiv_html import fetch_full_text
 from hepfeed.generation.llm import LLMClient, LLMError
 from hepfeed.generation.notes import NoteValidationError, generate_note
+from hepfeed.generation.prompt import load_system_prompt
 from hepfeed.ingestion.dedup import dedup_key
 from hepfeed.ingestion.models import PaperRecord
 from hepfeed.ingestion.store import (
@@ -52,6 +53,7 @@ async def generate_notes_once(
 
     store = SeenStore(settings.ensure_data_dir())
     try:
+        system_prompt, _ = load_system_prompt(settings)
         pending = store.pending_for_note(limit=limit)
         generated = 0
         failed = 0
@@ -99,7 +101,9 @@ async def generate_notes_once(
                         )
                         continue
                     try:
-                        note = await generate_note(record, llm, full_text=full_text)
+                        note = await generate_note(
+                            record, llm, full_text=full_text, system_prompt=system_prompt
+                        )
                     except (LLMError, NoteValidationError) as exc:
                         failed += 1
                         logger.warning("note generation failed for %s: %s", record.arxiv_id, exc)

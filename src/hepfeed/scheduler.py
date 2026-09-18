@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from apscheduler.schedulers.blocking import BlockingScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 
-from hepfeed.admin import AdminListener, PauseFlag
+from hepfeed.admin import AdminListener, ModerationFlag, PauseFlag
 from hepfeed.config import Settings
 from hepfeed.generation.pipeline import generate_notes_sync
 from hepfeed.ingestion.pipeline import poll_arxiv_sync
@@ -68,7 +68,7 @@ def run_note_job(settings: Settings, flag: PauseFlag) -> None:
     )
 
 
-def run_publish_job(settings: Settings, flag: PauseFlag) -> None:
+def run_publish_job(settings: Settings, flag: PauseFlag, moderation: ModerationFlag) -> None:
     """Scheduler job body: publish ready notes (or send to moderator)."""
     if flag.is_set():
         logger.info("paused: publishing skipped")
@@ -77,7 +77,7 @@ def run_publish_job(settings: Settings, flag: PauseFlag) -> None:
         logger.warning("publishing skipped: TELEGRAM_BOT_TOKEN not set")
         return
     try:
-        result = publish_notes_sync(settings, limit=10)
+        result = publish_notes_sync(settings, limit=10, moderation=moderation.is_set())
     except Exception:
         logger.exception("publish job failed")
         return
@@ -93,10 +93,12 @@ def build_scheduler(
     settings: Settings,
     interval_minutes: int | None = None,
     flag: PauseFlag | None = None,
+    moderation: ModerationFlag | None = None,
 ) -> BlockingScheduler:
     """Create a configured (not yet started) blocking scheduler."""
     minutes = interval_minutes or settings.arxiv_poll_interval_minutes
     pause = flag or PauseFlag()
+    moderation_flag = moderation or ModerationFlag(settings.publish_moderation)
     scheduler = BlockingScheduler(timezone="UTC")
     scheduler.add_job(
         run_poll_job,
@@ -121,7 +123,7 @@ def build_scheduler(
     )
     scheduler.add_job(
         run_publish_job,
-        args=(settings, pause),
+        args=(settings, pause, moderation_flag),
         trigger=IntervalTrigger(minutes=settings.publish_interval_minutes, timezone="UTC"),
         id="publish-notes",
         max_instances=1,
@@ -136,8 +138,9 @@ def run_scheduler(settings: Settings, interval_minutes: int | None = None) -> in
     """Start the blocking scheduler and block until interrupted."""
     minutes = interval_minutes or settings.arxiv_poll_interval_minutes
     flag = PauseFlag()
-    scheduler = build_scheduler(settings, interval_minutes, flag)
-    AdminListener(settings, flag).start()
+    moderation = ModerationFlag(settings.publish_moderation)
+    scheduler = build_scheduler(settings, interval_minutes, flag, moderation)
+    AdminListener(settings, flag, moderation).start()
     logger.info("scheduler starting: arXiv poll every %d minute(s); Ctrl+C to stop", minutes)
     try:
         scheduler.start()

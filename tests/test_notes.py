@@ -6,7 +6,13 @@ import asyncio
 
 import pytest
 
-from hepfeed.generation.notes import NoteValidationError, generate_note, validate_note
+from hepfeed.generation.notes import (
+    NoteValidationError,
+    build_note_messages,
+    generate_note,
+    validate_note,
+)
+from hepfeed.generation.prompt import SYSTEM_PROMPT
 from hepfeed.ingestion.models import PaperRecord
 
 _ARXIV_ID = "2609.01234"
@@ -28,6 +34,15 @@ def _note() -> str:
 
 def test_validate_note_accepts_correct_note() -> None:
     assert validate_note(_note(), _record()) == []
+
+
+def test_build_note_messages_system_prompt_override() -> None:
+    system, user = build_note_messages(_record(), system_prompt="CUSTOM PROMPT")
+    assert system == "CUSTOM PROMPT"
+    assert "arXiv ID" in user
+
+    system_default, _ = build_note_messages(_record())
+    assert system_default == SYSTEM_PROMPT
 
 
 def test_validate_note_rejects_overlong_note() -> None:

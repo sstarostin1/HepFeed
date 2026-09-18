@@ -49,3 +49,25 @@ def test_build_scheduler_registers_jobs() -> None:
 
 def test_parse_categories() -> None:
     assert _parse_categories("a, b,,c") == ["a", "b", "c"]
+
+
+def test_run_publish_job_passes_moderation_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from hepfeed.admin import ModerationFlag
+    from hepfeed.publishing.pipeline import PublishRunResult
+    from hepfeed.scheduler import run_publish_job
+
+    seen: dict[str, object] = {}
+
+    def fake_publish(settings: object, **kwargs: object) -> PublishRunResult:
+        seen.update(kwargs)
+        return PublishRunResult()
+
+    monkeypatch.setattr("hepfeed.scheduler.publish_notes_sync", fake_publish)
+    run_publish_job(
+        Settings(_env_file=None, telegram_bot_token="t"),
+        PauseFlag(),
+        ModerationFlag(True),
+    )
+    assert seen["moderation"] is True

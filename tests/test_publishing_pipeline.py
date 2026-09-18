@@ -120,6 +120,19 @@ def test_publish_moderation_mode(monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     assert _note_status(1) == "in_review"
 
 
+def test_publish_moderation_override(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("hepfeed.publishing.pipeline.TelegramClient", FakeTelegram)
+    _seed_note("2609.00107")
+
+    # /moderation off must win over PUBLISH_MODERATION=true in settings
+    result = publish_notes_sync(_settings(moderation=True), limit=5, moderation=False)
+
+    assert (result.published, result.sent_for_review) == (1, 0)
+    assert FakeTelegram.sent[0][0] == "@hep_test"
+    assert _note_status(1) == "published"
+
+
 def test_publish_approve_and_reject(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr("hepfeed.publishing.pipeline.TelegramClient", FakeTelegram)
