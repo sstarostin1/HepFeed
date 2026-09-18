@@ -30,7 +30,7 @@
 - GitHub: `github.com/sstarostin1/HepFeed`, публичный, ветка `main`,
   последний коммит `289febe` (всё запушено, дерево чистое).
 - Лицензия MIT (© Grestarideus). Линтер ruff, тесты pytest
-  (**96 passed**, все офлайн — MockTransport/фейки, реальный API не трогают).
+  (**105 passed**, все офлайн — MockTransport/фейки, реальный API не трогают).
 - Прекоммит-хуки активны: gitleaks + гигиена файлов.
 
 ### Сервер (деплой живой)
@@ -87,7 +87,9 @@
   `PauseFlag` + поток `AdminListener`.
 - `admin.py` — консоль оператора: long-polling getUpdates, команды
   `/status /pause /resume /run poll|notes|publish /help`, авторизация
-  только по модератор-чату.
+  только по модератор-чату; также обрабатывает `callback_query` от
+  inline-кнопок модерации (`parse_moderation_callback`, `handle_callback`,
+  `moderation_keyboard`).
 - `ingestion/` — `arxiv.py` (Atom API, ретраи 429/5xx/транспортных ошибок,
   окно свежести), `models.py` (PaperRecord, pydantic), `dedup.py`
   (ключи DOI → arXiv ID → title+author), `store.py` (SQLite: seen_papers +
@@ -99,9 +101,11 @@
   `prompt.py` (системный промпт: 8 правил, №8 — про отсутствующий текст),
   `notes.py` (пост-проверки: ≤4096, arXiv-ссылка, запрещённые эмодзи),
   `pipeline.py` (pending → полный текст → LLM → статус).
-- `publishing/` — `telegram.py` (sendMessage, уважает `retry_after`),
+- `publishing/` — `telegram.py` (sendMessage с опциональной inline-клавиатурой,
+  уважает `retry_after`),
   `pipeline.py` (роутинг `physics.acc*` → AP-канал; модерация
-  `PUBLISH_MODERATION=true` → оператору, решение по `--approve/--reject ID`).
+  `PUBLISH_MODERATION=true` → оператору с кнопками, решение по callback,
+  CLI `--approve/--reject ID`, `apply_moderation_decision_sync` для кнопок).
 - `logging/setup.py` — формат логов, приглушение шума APScheduler.
 
 ### Служебное (локально, в `data/`, не в git)
@@ -200,8 +204,16 @@
    `record_json` (записаны до миграции) — генерация их пропускает.
    Один запрос `id_list` к arXiv API вернёт метаданные; разовый скрипт
    обновления `record_json`.
-6. **Inline-кнопки модерации**: слушатель `admin.py` уже ловит updates —
-   расширить на `callback_query` (кнопки «Опубликовать/Отклонить»).
+6. ~~**Inline-кнопки модерации**~~ — **сделано (2026-09-18, локально, до деплоя
+   проверено тестами, 105 passed)**: сообщения модерации отправляются с
+   inline-клавиатурой («Опубликовать» / «Отклонить», callback_data
+   `note:<id>:approve|reject`); слушатель `admin.py` обрабатывает `callback_query`
+   (авторизация по `from.id` == модератор-чат), решение исполняется в фоновом
+   потоке (`apply_moderation_decision_sync` в `publishing/pipeline.py`), после
+   решения кнопки снимаются (`editMessageReplyMarkup`) и приходит статус-сообщение.
+   Защита от повторных нажатий: статус заметки проверяется перед применением
+   (действительно только для `ready`/`in_review`). CLI `--approve/--reject`
+   сохранён как запасной путь.
 7. **Тихий час** (CONCEPT §6.5): отложить публикацию ночных заметок до утра.
 8. **Фильтрация/тегирование** — отложено оператором (сложная семантика),
    вернуться после стабилизации качества заметок.

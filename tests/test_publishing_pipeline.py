@@ -12,6 +12,7 @@ from hepfeed.config import Settings
 from hepfeed.ingestion.models import PaperRecord
 from hepfeed.ingestion.store import SeenStore
 from hepfeed.publishing.pipeline import (
+    apply_moderation_decision_sync,
     publish_notes_sync,
     route_channel,
 )
@@ -40,7 +41,7 @@ def _paper(arxiv_id: str, acc: bool = False) -> PaperRecord:
 
 
 class FakeTelegram:
-    sent: ClassVar[list[tuple[str, str]]] = []
+    sent: ClassVar[list[tuple[str, str, dict[str, object] | None]]] = []
 
     def __init__(self, api_token: str, **kwargs: object) -> None:
         assert api_token, "bot token must be passed through"
@@ -51,8 +52,10 @@ class FakeTelegram:
     async def __aexit__(self, *exc_info: object) -> None:
         return None
 
-    async def send_message(self, chat_id: str, text: str) -> int:
-        FakeTelegram.sent.append((chat_id, text))
+    async def send_message(
+        self, chat_id: str, text: str, reply_markup: dict[str, object] | None = None
+    ) -> int:
+        FakeTelegram.sent.append((chat_id, text, reply_markup))
         return len(FakeTelegram.sent)
 
 
@@ -109,6 +112,11 @@ def test_publish_moderation_mode(monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     assert (result.published, result.sent_for_review) == (0, 1)
     assert FakeTelegram.sent[0][0] == "@mod_test"
     assert "ID: 1" in FakeTelegram.sent[0][1]
+    keyboard = FakeTelegram.sent[0][2]
+    assert keyboard is not None
+    buttons = keyboard["inline_keyboard"][0]
+    assert [button["text"] for button in buttons] == ["Опубликовать", "Отклонить"]
+    assert [button["callback_data"] for button in buttons] == ["note:1:approve", "note:1:reject"]
     assert _note_status(1) == "in_review"
 
 
@@ -130,6 +138,18 @@ def test_publish_approve_and_reject(monkeypatch: pytest.MonkeyPatch, tmp_path: P
     finally:
         conn.close()
     assert statuses == {1: "rejected", 2: "published"}
+
+
+def test_apply_moderation_decision_sync(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("hepfeed.publishing.pipeline.TelegramClient", FakeTelegram)
+    _seed_note("2609.00106")
+
+    result = apply_moderation_decision_sync(_settings(), note_id=1, approve=True)
+
+    assert result.published == 1
+    assert FakeTelegram.sent[0][0] == "@hep_test"
+    assert _note_status(1) == "published"
 
 
 def test_publish_dry_run(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

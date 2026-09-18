@@ -20,8 +20,9 @@ class TelegramError(RuntimeError):
 class TelegramClient:
     """Async client for the Telegram Bot API with 429-aware retries.
 
-    Uses plain sendMessage over httpx: the moderation UI with inline buttons
-    (a long-polling listener) is deliberately out of scope for the MVP.
+    Transport-only: payloads are composed by the publishing cycle, and the
+    operator UI (inline moderation buttons + callback answers) lives in the
+    admin listener.
     """
 
     def __init__(
@@ -51,14 +52,25 @@ class TelegramClient:
         if self._owns_client:
             await self._client.aclose()
 
-    async def send_message(self, chat_id: str, text: str) -> int:
+    async def send_message(
+        self,
+        chat_id: str,
+        text: str,
+        reply_markup: dict[str, object] | None = None,
+    ) -> int:
         """Send a plain-text message and return the created message id."""
-        url = f"/bot{self._api_token}/sendMessage"
-        payload = {
+        payload: dict[str, object] = {
             "chat_id": chat_id,
             "text": text,
             "disable_web_page_preview": True,
         }
+        if reply_markup is not None:
+            payload["reply_markup"] = reply_markup
+        data = await self._post_with_retries(f"/bot{self._api_token}/sendMessage", payload)
+        return int(data["result"]["message_id"])
+
+    async def _post_with_retries(self, url: str, payload: dict[str, object]) -> dict[str, object]:
+        """POST a Bot API call with 429/5xx-aware retries; return the parsed result."""
         last_error: str | None = None
         for attempt in range(1, self._max_attempts + 1):
             try:
@@ -73,7 +85,7 @@ class TelegramClient:
                 except ValueError:
                     data = {}
                 if response.status_code == 200 and data.get("ok"):
-                    return int(data["result"]["message_id"])
+                    return data
                 retriable = response.status_code == 429 or response.status_code >= 500
                 parameters = data.get("parameters") or {}
                 retry_after = (

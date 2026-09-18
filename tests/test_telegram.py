@@ -20,6 +20,39 @@ def _client(handler, **kwargs: object) -> TelegramClient:
     )
 
 
+def test_send_message_sends_reply_markup() -> None:
+    seen: dict[str, object] = {}
+    markup: dict[str, object] = {
+        "inline_keyboard": [[{"text": "ok", "callback_data": "note:1:approve"}]]
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["payload"] = json.loads(request.content)
+        return httpx.Response(200, json={"ok": True, "result": {"message_id": 42}})
+
+    async def scenario() -> None:
+        async with _client(handler) as tg:
+            await tg.send_message("@moderator", "hello", reply_markup=markup)
+
+    asyncio.run(scenario())
+    assert seen["payload"]["reply_markup"] == markup
+
+
+def test_send_message_without_markup_omits_key() -> None:
+    seen: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["payload"] = json.loads(request.content)
+        return httpx.Response(200, json={"ok": True, "result": {"message_id": 42}})
+
+    async def scenario() -> None:
+        async with _client(handler) as tg:
+            await tg.send_message("@channel", "hello")
+
+    asyncio.run(scenario())
+    assert "reply_markup" not in seen["payload"]
+
+
 def test_send_message_returns_message_id() -> None:
     seen: dict[str, object] = {}
 

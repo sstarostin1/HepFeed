@@ -1,7 +1,8 @@
 """Publishing cycle: ready notes to Telegram channels (docs/CONCEPT.md, section 6.5).
 
 MVP moderation: ready notes go to the operator chat (``PUBLISH_MODERATION=true``)
-and wait for a decision via ``publish --approve ID`` / ``publish --reject ID``.
+with inline buttons; the decision arrives through the admin listener callback
+or via ``publish --approve ID`` / ``publish --reject ID``.
 Channel routing: accelerator-physics notes go to the AP channel, the rest to HEP.
 """
 
@@ -12,6 +13,7 @@ import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from hepfeed.admin import moderation_keyboard
 from hepfeed.config import Settings
 from hepfeed.ingestion.store import (
     NOTE_STATUS_IN_REVIEW,
@@ -117,7 +119,7 @@ async def _publish_ready(
                 continue
             text = f"ID: {note.note_id} — на модерацию\n\n{note.note_text}"
             try:
-                await tg.send_message(chat, text)
+                await tg.send_message(chat, text, reply_markup=moderation_keyboard(note.note_id))
             except TelegramError as exc:
                 failed += 1
                 logger.warning("moderator send failed for note %d: %s", note.note_id, exc)
@@ -192,3 +194,26 @@ def publish_notes_sync(
     return asyncio.run(
         publish_notes_once(settings, limit=limit, dry_run=dry_run, approve=approve, reject=reject)
     )
+
+
+def apply_moderation_decision_sync(
+    settings: Settings, *, note_id: int, approve: bool
+) -> PublishRunResult:
+    """Apply a moderator decision to one note (inline-button path, no CLI)."""
+    if not settings.database_url.startswith("sqlite:///"):
+        raise RuntimeError("SQLite storage is required for publishing for now")
+    if not settings.telegram_bot_token:
+        raise RuntimeError("TELEGRAM_BOT_TOKEN is not configured")
+
+    store = SeenStore(settings.ensure_data_dir())
+
+    async def scenario() -> PublishRunResult:
+        async with TelegramClient(settings.telegram_bot_token) as tg:
+            return await _apply_decision(
+                store, tg, settings, note_id=note_id, approve=approve, dry_run=False
+            )
+
+    try:
+        return asyncio.run(scenario())
+    finally:
+        store.close()
