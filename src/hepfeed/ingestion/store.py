@@ -208,6 +208,14 @@ class SeenStore:
             return None
         return ReadyNote(note_id=note_id, paper=paper, note_text=row[0])
 
+    def note_status(self, note_id: int) -> str | None:
+        """Publishing status of a note (None when the note does not exist)."""
+        row = self._conn.execute(
+            "SELECT status FROM notes WHERE id = ?",
+            (note_id,),
+        ).fetchone()
+        return str(row[0]) if row is not None else None
+
     def mark_note_published(self, note_id: int, channel: str) -> None:
         """Mark a note as published to the given channel."""
         self._conn.execute(

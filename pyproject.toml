@@ -87,6 +87,7 @@ known-first-party = ["hepfeed"]
 "src/hepfeed/generation/prompt.py" = ["RUF001", "RUF002", "RUF003"]
 # User-facing strings for the operator are Russian by design
 "src/hepfeed/publishing/pipeline.py" = ["RUF001"]
+"src/hepfeed/admin.py" = ["RUF001"]
 
 [tool.ruff.format]
 quote-style = "double"

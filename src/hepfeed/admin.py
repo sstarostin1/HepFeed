@@ -26,7 +26,9 @@ _HELP_TEXT = (
     "/run poll - опросить arXiv сейчас\n"
     "/run notes - сгенерировать заметки сейчас\n"
     "/run publish - опубликовать готовые заметки\n"
-    "/help - эта справка"
+    "/help - эта справка\n\n"
+    "Заметки на модерации приходят с кнопками «Опубликовать / Отклонить» - "
+    "решение принимается прямо в чате."
 )
 
 
@@ -79,6 +81,80 @@ def handle_update(
             return f"Запущено в фоне: {target}", f"run_{target}"
         return "Укажите задачу: /run poll | notes | publish", None
     return "Неизвестная команда. Доступно: /status, /pause, /resume, /run, /help", None
+
+
+_MODERATION_APPROVE = "approve"
+_MODERATION_REJECT = "reject"
+_MODERATION_PREFIX = "note"
+
+
+def moderation_keyboard(note_id: int) -> dict[str, object]:
+    """Inline keyboard with the approve/reject decision for a note (moderator chat)."""
+    return {
+        "inline_keyboard": [
+            [
+                {
+                    "text": "Опубликовать",
+                    "callback_data": f"{_MODERATION_PREFIX}:{note_id}:{_MODERATION_APPROVE}",
+                },
+                {
+                    "text": "Отклонить",
+                    "callback_data": f"{_MODERATION_PREFIX}:{note_id}:{_MODERATION_REJECT}",
+                },
+            ]
+        ]
+    }
+
+
+def parse_moderation_callback(data: object) -> tuple[bool, int] | None:
+    """Parse ``note:<id>:approve`` / ``note:<id>:reject``; None when malformed."""
+    if not isinstance(data, str):
+        return None
+    parts = data.split(":")
+    if len(parts) != 3 or parts[0] != _MODERATION_PREFIX:
+        return None
+    try:
+        note_id = int(parts[1])
+    except ValueError:
+        return None
+    if parts[2] == _MODERATION_APPROVE:
+        return True, note_id
+    if parts[2] == _MODERATION_REJECT:
+        return False, note_id
+    return None
+
+
+def handle_callback(
+    update: dict[str, object], settings: Settings
+) -> tuple[str | None, str | None, str | None]:
+    """Process a callback_query update; return (callback_query_id, answer, background_action)."""
+    callback = update.get("callback_query")
+    if not isinstance(callback, dict):
+        return None, None, None
+    callback_id = str(callback.get("id") or "") or None
+    sender = (callback.get("from") or {}).get("id")
+    moderator = str(settings.telegram_moderator_chat_id or "")
+    if not moderator or sender is None or str(sender) != moderator:
+        logger.warning("admin listener: callback from unauthorized user %s", sender)
+        return callback_id, "Недостаточно прав", None
+    parsed = parse_moderation_callback(callback.get("data"))
+    if parsed is None:
+        return callback_id, "Неизвестное действие кнопки", None
+    approve, note_id = parsed
+    action = f"moderate:{_MODERATION_APPROVE if approve else _MODERATION_REJECT}:{note_id}"
+    answer = f"Публикую заметку {note_id}..." if approve else f"Отклоняю заметку {note_id}..."
+    return callback_id, answer, action
+
+
+def _callback_message_ref(update: dict[str, object]) -> tuple[object, object] | None:
+    """(chat_id, message_id) of the message the moderation buttons are attached to."""
+    callback = update.get("callback_query")
+    message = (callback or {}).get("message") or {}
+    chat_id = (message.get("chat") or {}).get("id")
+    message_id = message.get("message_id")
+    if chat_id is None or message_id is None:
+        return None
+    return chat_id, message_id
 
 
 def _status_reply(settings: Settings, flag: PauseFlag) -> str:
@@ -139,17 +215,32 @@ class AdminListener:
 
     def _process(self, update: dict[str, object], client: httpx.Client) -> None:
         try:
-            reply, action = handle_update(update, self._settings, self._flag)
+            if update.get("callback_query") is not None:
+                callback_id, answer, action = handle_callback(update, self._settings)
+                reply = None
+            else:
+                callback_id = answer = None
+                reply, action = handle_update(update, self._settings, self._flag)
         except Exception:
             logger.exception("admin command processing failed")
             return
         if action:
-            threading.Thread(
-                target=self._run_action,
-                args=(action,),
-                name=f"admin-{action}",
-                daemon=True,
-            ).start()
+            if action.startswith("moderate:"):
+                threading.Thread(
+                    target=self._run_moderation,
+                    args=(action, _callback_message_ref(update)),
+                    name=f"admin-{action}",
+                    daemon=True,
+                ).start()
+            else:
+                threading.Thread(
+                    target=self._run_action,
+                    args=(action,),
+                    name=f"admin-{action}",
+                    daemon=True,
+                ).start()
+        if callback_id and answer:
+            self._answer_callback(client, callback_id, answer)
         if reply:
             self._send(client, reply)
 
@@ -189,3 +280,74 @@ class AdminListener:
             )
         except httpx.TransportError as exc:
             logger.warning("admin reply send failed: %s", exc)
+
+    def _answer_callback(self, client: httpx.Client, callback_query_id: str, text: str) -> None:
+        token = self._settings.telegram_bot_token
+        if not token:
+            return
+        try:
+            client.post(
+                f"{_TELEGRAM_API_URL}/bot{token}/answerCallbackQuery",
+                json={"callback_query_id": callback_query_id, "text": text},
+            )
+        except httpx.TransportError as exc:
+            logger.warning("admin callback answer failed: %s", exc)
+
+    def _clear_reply_markup(
+        self, client: httpx.Client, chat_id: object, message_id: object
+    ) -> None:
+        token = self._settings.telegram_bot_token
+        if not token:
+            return
+        try:
+            client.post(
+                f"{_TELEGRAM_API_URL}/bot{token}/editMessageReplyMarkup",
+                json={
+                    "chat_id": chat_id,
+                    "message_id": message_id,
+                    "reply_markup": {"inline_keyboard": []},
+                },
+            )
+        except httpx.TransportError as exc:
+            logger.warning("admin clear reply markup failed: %s", exc)
+
+    def _run_moderation(self, action: str, message_ref: tuple[object, object] | None) -> None:
+        """Apply a moderation decision from inline buttons and update the UI."""
+        try:
+            status_line, applied = self._apply_moderation_decision(action)
+        except Exception:
+            logger.exception("moderation action %s failed", action)
+            return
+        with httpx.Client(timeout=30.0) as client:
+            if applied and message_ref is not None:
+                self._clear_reply_markup(client, message_ref[0], message_ref[1])
+            self._send(client, status_line)
+
+    def _apply_moderation_decision(self, action: str) -> tuple[str, bool]:
+        """Run the decision in the store and publishing pipeline; return (status_line, applied)."""
+        from hepfeed.ingestion.store import (  # lazy: avoids import cycles
+            NOTE_STATUS_IN_REVIEW,
+            NOTE_STATUS_READY,
+            SeenStore,
+        )
+
+        _, decision, raw_id = action.split(":")
+        note_id = int(raw_id)
+        store = SeenStore(self._settings.ensure_data_dir())
+        try:
+            status = store.note_status(note_id)
+        finally:
+            store.close()
+        if status not in (NOTE_STATUS_READY, NOTE_STATUS_IN_REVIEW):
+            logger.warning("moderation skipped for note %d (status %s)", note_id, status)
+            return f"Заметка {note_id}: уже обработана (статус: {status})", False
+
+        from hepfeed.publishing.pipeline import apply_moderation_decision_sync
+
+        approve = decision == "approve"
+        result = apply_moderation_decision_sync(self._settings, note_id=note_id, approve=approve)
+        if approve and result.published == 1:
+            return f"Заметка {note_id}: опубликована", True
+        if not approve and result.rejected == 1:
+            return f"Заметка {note_id}: отклонена", True
+        return f"Заметка {note_id}: действие не удалось (см. логи)", False
