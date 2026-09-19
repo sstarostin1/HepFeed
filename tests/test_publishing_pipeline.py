@@ -219,6 +219,38 @@ def test_to_telegram_html_escapes_unsafe_markup() -> None:
     assert "<code>x</code>" in converted
 
 
+def test_to_telegram_html_full_markup_matrix() -> None:
+    converted = to_telegram_html(
+        "**жирный** *курсив* __подчёркнутый__ ~~зачёркнутый~~ `код` ||спойлер||"
+    )
+    assert "<b>жирный</b>" in converted
+    assert "<i>курсив</i>" in converted
+    assert "<u>подчёркнутый</u>" in converted
+    assert "<s>зачёркнутый</s>" in converted
+    assert "<code>код</code>" in converted
+    assert "<tg-spoiler>спойлер</tg-spoiler>" in converted
+
+
+def test_to_telegram_html_fenced_code_block_drops_language() -> None:
+    converted = to_telegram_html("```python\nm = 1\nx = 2\n```")
+    assert converted == "<pre>m = 1\nx = 2</pre>"
+
+
+def test_to_telegram_html_bulleted_list() -> None:
+    converted = to_telegram_html("Вступление.\n- первый **пункт**\n- второй\nДальше.")
+    assert "<ul><li>первый <b>пункт</b></li><li>второй</li></ul>" in converted
+    assert converted.startswith("Вступление.")
+    assert converted.endswith("Дальше.")
+
+
+def test_to_telegram_html_leaves_latex_as_plain_text() -> None:
+    # LaTeX cannot render in Telegram: it must survive as visible text
+    text = r"$\frac{d\sigma}{dp_T} = 1.2$ pb и \begin{equation} x \end{equation}"
+    converted = to_telegram_html(text)
+    assert "$" in converted and "\\frac" in converted and "\\begin{equation}" in converted
+    assert "<b>" not in converted and "<code>" not in converted
+
+
 def test_to_telegram_html_keeps_plain_text_without_markup() -> None:
     text = "Просто текст, без разметки.\nВторая строка."
     assert to_telegram_html(text) == html.escape(text, quote=False)
